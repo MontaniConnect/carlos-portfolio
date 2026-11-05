@@ -143,7 +143,7 @@ url: https://www.montani.ph/author/carlos-abiera
 
 ### Text Analysis — PRRD SONA
 
-dates: Jul 2020 — Present  
+dates: Jul 2017 — Present  
 tags: Python, NLP, Text Analysis
 
 Text analysis of the Philippine President's State of the Nation Addresses (2016 & 2017) using Python.
