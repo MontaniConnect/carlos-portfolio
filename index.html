@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Carlos Abiera — Operations Manager &amp; Technologist</title>
+<meta name="description" content="Carlos Abiera — Operations Manager at Montani International Inc. Data engineering background, remote team leadership, and writing on management at Montani Insights." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23000%22/><text x=%2250%22 y=%2268%22 font-size=%2260%22 fill=%22%23fff%22 text-anchor=%22middle%22 font-family=%22sans-serif%22>C</text></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!--
+  All portfolio content lives in content.md, next to this file.
+  content.js fetches and parses it on load (and polls it every few
+  seconds), then renders everything below into #sidebar-root and
+  #sections-root. Edit content.md to add, change, or remove records —
+  no HTML edits needed. This page must be served over http(s)
+  (e.g. `vercel dev`, `python3 -m http.server`) — fetch() of a local
+  file does not work when opened directly as file://.
+-->
+
+<a class="skip-link" href="#content">Skip to content</a>
+
+<button id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">
+  <span></span><span></span><span></span>
+</button>
+
+<div id="nav-scrim" class="nav-scrim"></div>
+
+<div class="layout">
+
+  <header class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <div id="sidebar-root">
+        <p class="eyebrow">Loading…</p>
+      </div>
+    </div>
+  </header>
+
+  <main id="content" class="content">
+    <div id="sections-root">
+      <section class="section">
+        <div class="section-body"><p>Loading portfolio content…</p></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script src="content.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
