@@ -18,7 +18,8 @@
   needed) and never holds any credential. "Publish" copies the generated
   content.md to your clipboard and opens GitHub's own file editor for you
   to paste into and commit there, using your own logged-in GitHub session
-  — no token anywhere in this app.
+  — no token anywhere in this app. The login screen below is just a UI
+  gate to keep casual visitors out; there's no server checking it.
 -->
 
 <header class="topbar">
@@ -28,10 +29,24 @@
   </div>
   <div class="topbar-right">
     <a href="index.html" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View Live ↗</a>
+    <button id="btn-logout" class="btn btn-ghost" hidden>Log out</button>
   </div>
 </header>
 
-<main id="editor-shell" class="editor-shell">
+<div id="login-screen" class="login-screen" hidden>
+  <div class="login-card">
+    <h2>Content Editor Login</h2>
+    <p class="hint">This just keeps the editor from opening to a casual visitor — publishing still happens by hand on GitHub, with your own GitHub login.</p>
+    <label class="field-label" for="login-username">Username</label>
+    <input id="login-username" type="text" autocomplete="username" />
+    <label class="field-label" for="login-password">Password</label>
+    <input id="login-password" type="password" autocomplete="current-password" />
+    <button id="btn-login" class="btn btn-primary login-submit">Log in</button>
+    <p id="login-msg" class="msg"></p>
+  </div>
+</div>
+
+<main id="editor-shell" class="editor-shell" hidden>
   <aside id="editor-sidebar" class="editor-sidebar">
     <nav class="section-nav">
       <button type="button" class="section-nav-item active" data-nav-id="profile">Profile</button>
@@ -70,7 +85,7 @@
   </div>
 </div>
 
-<div class="savebar">
+<div class="savebar" hidden>
   <button id="btn-download" class="btn btn-ghost">Download content.md</button>
   <button id="btn-publish" class="btn btn-primary">Publish via GitHub</button>
 </div>

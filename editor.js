@@ -10,6 +10,11 @@
  * — api/publish.js, a Vercel function — exists in this repo for a one-click
  * publish later, but isn't used by this flow.)
  *
+ * The login screen below is a plain UI gate — it just keeps a casual
+ * visitor from opening the editor. There's no server to check it against
+ * (there's no credential anywhere in this flow to protect), so it's a
+ * client-side-only check against EDITOR_USERNAME/EDITOR_PASSWORD.
+ *
  * The content model is an ORDERED LIST of sections, mirroring content.js:
  * state.sections is an array in document order, each tagged with a
  * `layout` (about/experience/education/certification/blog/projects/
@@ -26,6 +31,12 @@ const BRANCH = 'main';
 const FILE_PATH = 'content.md';
 const API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`;
 const GITHUB_EDIT_URL = `https://github.com/${OWNER}/${REPO}/edit/${BRANCH}/${FILE_PATH}`;
+
+// Client-side-only UI gate. Change these to whatever you like — nothing
+// server-side depends on them.
+const EDITOR_USERNAME = 'admin';
+const EDITOR_PASSWORD = 'admin';
+const LOGIN_SESSION_KEY = 'portfolio_editor_logged_in';
 
 const KNOWN_KEYS = new Set([
   'name', 'eyebrow', 'role', 'blurb', 'email', 'linkedin', 'footer',
@@ -841,6 +852,49 @@ async function confirmPublish() {
   window.open(GITHUB_EDIT_URL, '_blank', 'noopener,noreferrer');
 }
 
+// ---------- login screen (client-side UI gate only) ----------
+
+function isLoggedIn() {
+  return sessionStorage.getItem(LOGIN_SESSION_KEY) === 'true';
+}
+
+function showLoginScreen() {
+  document.getElementById('login-screen').hidden = false;
+  document.getElementById('editor-shell').hidden = true;
+  document.querySelector('.savebar').hidden = true;
+  document.getElementById('btn-logout').hidden = true;
+  document.getElementById('login-username').focus();
+}
+
+function showEditorShell() {
+  document.getElementById('login-screen').hidden = true;
+  document.getElementById('editor-shell').hidden = false;
+  document.querySelector('.savebar').hidden = false;
+  document.getElementById('btn-logout').hidden = false;
+}
+
+function attemptLogin() {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const msgEl = document.getElementById('login-msg');
+  if (username !== EDITOR_USERNAME || password !== EDITOR_PASSWORD) {
+    msgEl.textContent = 'Invalid username or password.';
+    msgEl.className = 'msg err';
+    return;
+  }
+  sessionStorage.setItem(LOGIN_SESSION_KEY, 'true');
+  msgEl.textContent = '';
+  msgEl.className = 'msg';
+  document.getElementById('login-password').value = '';
+  showEditorShell();
+  loadAndRenderEditor();
+}
+
+function logOut() {
+  sessionStorage.removeItem(LOGIN_SESSION_KEY);
+  showLoginScreen();
+}
+
 // ---------- toast ----------
 
 let toastTimer = null;
@@ -854,7 +908,27 @@ function showToast(text) {
 
 // ---------- boot ----------
 
+async function loadAndRenderEditor() {
+  try {
+    const { raw, sha } = await loadFromGitHub();
+    currentSha = sha;
+    const model = parseContent(raw);
+    state = modelToState(model);
+    activeId = state.sections.length ? state.sections[0].id : 'profile';
+    renderSidebarNav();
+    renderActivePanel();
+  } catch (err) {
+    document.getElementById('editor-main').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
 async function boot() {
+  document.getElementById('btn-login').addEventListener('click', attemptLogin);
+  document.getElementById('login-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); attemptLogin(); }
+  });
+  document.getElementById('btn-logout').addEventListener('click', logOut);
+
   document.getElementById('btn-cancel-publish').addEventListener('click', closePublishPanel);
   document.getElementById('btn-confirm-publish').addEventListener('click', confirmPublish);
   document.getElementById('btn-cancel-add-section').addEventListener('click', closeAddSectionPanel);
@@ -868,16 +942,11 @@ async function boot() {
   attachSidebarListeners();
   attachMainListeners();
 
-  try {
-    const { raw, sha } = await loadFromGitHub();
-    currentSha = sha;
-    const model = parseContent(raw);
-    state = modelToState(model);
-    activeId = state.sections.length ? state.sections[0].id : 'profile';
-    renderSidebarNav();
-    renderActivePanel();
-  } catch (err) {
-    document.getElementById('editor-main').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
+  if (isLoggedIn()) {
+    showEditorShell();
+    await loadAndRenderEditor();
+  } else {
+    showLoginScreen();
   }
 }
 
