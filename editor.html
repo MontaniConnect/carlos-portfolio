@@ -15,11 +15,11 @@
 
 <!--
   This page reads content.md directly from GitHub (public repo, no auth
-  needed) and never holds any credential. "Publish" copies the generated
-  content.md to your clipboard and opens GitHub's own file editor for you
-  to paste into and commit there, using your own logged-in GitHub session
-  — no token anywhere in this app. The login screen below is just a UI
-  gate to keep casual visitors out; there's no server checking it.
+  needed). Publishing goes through a small Vercel serverless function
+  (api/publish.js), which is the only place that holds the real GitHub
+  token — it never reaches this browser, and whoever uses this editor
+  doesn't need a GitHub account of their own. The login below is checked
+  again, for real, by that server function before it will commit anything.
 -->
 
 <header class="topbar">
@@ -36,7 +36,7 @@
 <div id="login-screen" class="login-screen" hidden>
   <div class="login-card">
     <h2>Content Editor Login</h2>
-    <p class="hint">This just keeps the editor from opening to a casual visitor — publishing still happens by hand on GitHub, with your own GitHub login.</p>
+    <p class="hint">Publishing is verified again on the server — this just keeps the editor from opening to a casual visitor.</p>
     <label class="field-label" for="login-username">Username</label>
     <input id="login-username" type="text" autocomplete="username" />
     <label class="field-label" for="login-password">Password</label>
@@ -62,14 +62,16 @@
 </main>
 
 <div id="publish-panel" class="panel panel-floating" hidden>
-  <h2>Publish via GitHub</h2>
-  <p>This app never holds a GitHub credential. Clicking below copies the content below to your clipboard and opens <code>content.md</code> in GitHub's own editor — select all there, paste, and commit using your own GitHub login.</p>
-  <details class="preview-details" open>
-    <summary>content.md to copy</summary>
+  <h2>Publish to GitHub</h2>
+  <p>This commits your changes directly to <code>content.md</code> on the live repo via a small server-side function — you don't need a GitHub account to do this. The site rebuilds automatically, usually live within a minute.</p>
+  <label class="field-label" for="commit-message">Commit message</label>
+  <input id="commit-message" type="text" value="Update portfolio content" />
+  <details class="preview-details">
+    <summary>Preview raw content.md</summary>
     <textarea id="preview-raw" class="preview-raw" readonly></textarea>
   </details>
   <div class="panel-actions">
-    <button id="btn-confirm-publish" class="btn btn-primary">Copy &amp; Open GitHub</button>
+    <button id="btn-confirm-publish" class="btn btn-primary">Yes, publish now</button>
     <button id="btn-cancel-publish" class="btn btn-ghost">Cancel</button>
   </div>
   <p id="publish-msg" class="msg"></p>
@@ -87,7 +89,7 @@
 
 <div class="savebar" hidden>
   <button id="btn-download" class="btn btn-ghost">Download content.md</button>
-  <button id="btn-publish" class="btn btn-primary">Publish via GitHub</button>
+  <button id="btn-publish" class="btn btn-primary">Publish to GitHub</button>
 </div>
 
 <div id="toast" class="toast" hidden></div>

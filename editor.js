@@ -1,19 +1,13 @@
 /**
  * editor.js — a section-based editor for content.md. Reading content.md is
- * a plain, unauthenticated GitHub API call (the repo is public).
- *
- * Publishing is manual and token-free by design: GitHub's write APIs always
- * require a credential, and this editor deliberately holds none. Instead,
- * "Publish" copies the generated content.md to your clipboard and opens
- * GitHub's own file editor for you to paste into and commit — using your
- * own logged-in GitHub session, not a stored secret. (A server-side option
- * — api/publish.js, a Vercel function — exists in this repo for a one-click
- * publish later, but isn't used by this flow.)
- *
- * The login screen below is a plain UI gate — it just keeps a casual
- * visitor from opening the editor. There's no server to check it against
- * (there's no credential anywhere in this flow to protect), so it's a
- * client-side-only check against EDITOR_USERNAME/EDITOR_PASSWORD.
+ * a plain, unauthenticated GitHub API call (the repo is public). Publishing
+ * goes through a small Vercel serverless function (api/publish.js), which
+ * is the only place that holds the real GitHub token — it never reaches
+ * this browser. This matters because whoever uses this editor may not have
+ * a GitHub account of their own at all, so a flow that expects them to
+ * commit on github.com directly isn't an option. The editor's login screen
+ * just needs to send the same credentials the server checks for real
+ * before it will commit anything.
  *
  * The content model is an ORDERED LIST of sections, mirroring content.js:
  * state.sections is an array in document order, each tagged with a
@@ -30,13 +24,20 @@ const REPO = 'carlos-portfolio';
 const BRANCH = 'main';
 const FILE_PATH = 'content.md';
 const API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`;
-const GITHUB_EDIT_URL = `https://github.com/${OWNER}/${REPO}/edit/${BRANCH}/${FILE_PATH}`;
 
-// Client-side-only UI gate. Change these to whatever you like — nothing
-// server-side depends on them.
+// Where the publish request actually goes — the serverless function that
+// holds the real GitHub token. Update this if the backend is redeployed
+// under a different Vercel project URL.
+const PUBLISH_API_URL = 'https://carlos-self.vercel.app/api/publish';
+
+// Client-side login gate only — a convenience to keep the editor UI from
+// opening to a casual visitor. It is NOT the real security boundary: that
+// check happens again, for real, inside api/publish.js on the server,
+// against the EDITOR_USERNAME/EDITOR_PASSWORD env vars there. Change both
+// places together if you want different credentials.
 const EDITOR_USERNAME = 'admin';
 const EDITOR_PASSWORD = 'admin';
-const LOGIN_SESSION_KEY = 'portfolio_editor_logged_in';
+const LOGIN_SESSION_KEY = 'portfolio_editor_login';
 
 const KNOWN_KEYS = new Set([
   'name', 'eyebrow', 'role', 'blurb', 'email', 'linkedin', 'footer',
@@ -347,6 +348,45 @@ async function loadFromGitHub() {
   if (!res.ok) throw new Error(`Couldn't load content.md from GitHub (${res.status}).`);
   const json = await res.json();
   return { raw: base64ToUtf8(json.content), sha: json.sha };
+}
+
+// ---------- publish (via the serverless function, which holds the real token) ----------
+
+function getStoredCredentials() {
+  const raw = sessionStorage.getItem(LOGIN_SESSION_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+function setStoredCredentials(username, password) {
+  sessionStorage.setItem(LOGIN_SESSION_KEY, JSON.stringify({ username, password }));
+}
+function clearStoredCredentials() {
+  sessionStorage.removeItem(LOGIN_SESSION_KEY);
+}
+
+async function publishViaApi(newRaw, sha, message) {
+  const creds = getStoredCredentials();
+  if (!creds) throw new Error('Please log in first.');
+  const res = await fetch(PUBLISH_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: creds.username,
+      password: creds.password,
+      content: newRaw,
+      sha,
+      message: message || 'Update portfolio content'
+    })
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearStoredCredentials();
+      throw new Error('Login rejected by the server. Please log in again.');
+    }
+    throw new Error(json.error || `The publish server rejected the update (${res.status}).`);
+  }
+  return json;
 }
 
 // ---------- state ----------
@@ -836,26 +876,34 @@ function closePublishPanel() {
 }
 
 async function confirmPublish() {
+  const btn = document.getElementById('btn-confirm-publish');
   const msgEl = document.getElementById('publish-msg');
-  const raw = stateToMarkdown(state);
-
+  btn.disabled = true;
+  btn.textContent = 'Publishing…';
+  msgEl.textContent = '';
+  msgEl.className = 'msg';
   try {
-    await navigator.clipboard.writeText(raw);
-    msgEl.textContent = 'Copied. Paste it into the GitHub editor that just opened (select all first), then commit there.';
+    const raw = stateToMarkdown(state);
+    const message = document.getElementById('commit-message').value || 'Update portfolio content';
+    const result = await publishViaApi(raw, currentSha, message);
+    currentSha = result.sha;
+    msgEl.textContent = 'Published. The live site will update automatically within about a minute.';
     msgEl.className = 'msg ok';
-    showToast('Copied content.md to clipboard');
+    showToast('Published to GitHub ✓');
+    setTimeout(closePublishPanel, 1600);
   } catch (err) {
-    msgEl.textContent = "Couldn't copy automatically — select all the text in the preview above and copy it manually, then paste it into the GitHub editor that just opened.";
+    msgEl.textContent = err.message;
     msgEl.className = 'msg err';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Yes, publish now';
   }
-
-  window.open(GITHUB_EDIT_URL, '_blank', 'noopener,noreferrer');
 }
 
-// ---------- login screen (client-side UI gate only) ----------
+// ---------- login screen ----------
 
 function isLoggedIn() {
-  return sessionStorage.getItem(LOGIN_SESSION_KEY) === 'true';
+  return !!getStoredCredentials();
 }
 
 function showLoginScreen() {
@@ -882,7 +930,7 @@ function attemptLogin() {
     msgEl.className = 'msg err';
     return;
   }
-  sessionStorage.setItem(LOGIN_SESSION_KEY, 'true');
+  setStoredCredentials(username, password);
   msgEl.textContent = '';
   msgEl.className = 'msg';
   document.getElementById('login-password').value = '';
@@ -891,7 +939,7 @@ function attemptLogin() {
 }
 
 function logOut() {
-  sessionStorage.removeItem(LOGIN_SESSION_KEY);
+  clearStoredCredentials();
   showLoginScreen();
 }
 
