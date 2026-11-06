@@ -2,6 +2,14 @@
  * content.js — parses content.md into a model and renders the portfolio DOM.
  * content.md is the single source of truth: edit it, and (re)loading the
  * page re-fetches and re-renders from it. No HTML edits required.
+ *
+ * The model is an ORDERED LIST of sections (array, not a dictionary), so the
+ * section order in content.md drives both the sidebar nav and the main
+ * content order. Each section carries a `layout` — either inferred from its
+ * heading text (About/Experience/Education/Certification/Blog/Projects/
+ * Contact) or set explicitly via a `layout:` meta line, which lets a section
+ * be renamed without losing its specialized rendering. Any section whose
+ * layout doesn't match a known one renders with a generic card layout.
  */
 
 const CONTENT_URL = 'content.md';
@@ -9,20 +17,24 @@ const POLL_INTERVAL_MS = 4000;
 
 const KNOWN_KEYS = new Set([
   'name', 'eyebrow', 'role', 'blurb', 'email', 'linkedin', 'footer',
-  'dates', 'location', 'tags', 'tab', 'degree',
+  'dates', 'location', 'tags', 'tab', 'degree', 'layout',
   'intro', 'view_all_url', 'view_all_label',
   'issuer', 'date', 'credential_id', 'url', 'cta_label'
 ]);
 
-const NAV_LABELS = {
-  about: 'About',
-  experience: 'Experience',
-  certification: 'Certification',
-  blog: 'Blog',
-  projects: 'Projects',
-  contact: 'Contact'
+const DEFAULT_LAYOUT_FOR_TITLE = {
+  About: 'about', Experience: 'experience', Education: 'education',
+  Certification: 'certification', Blog: 'blog', Projects: 'projects', Contact: 'contact'
 };
-const NAV_ORDER = ['about', 'experience', 'certification', 'blog', 'projects', 'contact'];
+const PROSE_LAYOUTS = new Set(['about', 'contact']);
+const DEFAULT_HEADING_TEXT = {
+  about: 'About Me', experience: "Where I've Worked", certification: 'Certification',
+  blog: 'Blog', projects: 'Projects', contact: "What's Next?"
+};
+
+function inferDefaultLayout(title) {
+  return DEFAULT_LAYOUT_FOR_TITLE[title] || 'custom';
+}
 
 function slug(title) {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -117,11 +129,10 @@ function parseEntryBody(bodyLines) {
   return { meta, bullets, paragraphs };
 }
 
-function splitEntries(bodyLines) {
-  const { meta: sectionMeta, rest } = consumeLeadingMeta(bodyLines);
+function extractEntries(lines) {
   const entries = [];
   let current = null;
-  for (const line of rest) {
+  for (const line of lines) {
     const h3 = line.match(/^###\s+(.+)$/);
     if (h3) {
       if (current) entries.push(current);
@@ -131,44 +142,53 @@ function splitEntries(bodyLines) {
     }
   }
   if (current) entries.push(current);
-  return { sectionMeta, entries };
+  return entries;
 }
 
 function parseContent(raw) {
   const { profile, rest } = parseFrontmatter(raw);
-  const sections = splitSections(rest);
-  const model = { profile, sections: {}, order: [] };
+  const rawSections = splitSections(rest);
 
-  sections.forEach(sec => {
-    const key = sec.title;
-    model.order.push(key);
-    if (key === 'About' || key === 'Contact') {
-      const parsed = parseEntryBody(sec.bodyLines);
-      model.sections[key] = { type: 'prose', meta: parsed.meta, paragraphs: parsed.paragraphs };
-    } else {
-      const { sectionMeta, entries } = splitEntries(sec.bodyLines);
-      const parsedEntries = entries.map(e => {
-        const body = parseEntryBody(e.bodyLines);
-        return { title: e.title, meta: body.meta, bullets: body.bullets, paragraphs: body.paragraphs };
-      });
-      model.sections[key] = { type: 'list', meta: sectionMeta, entries: parsedEntries };
+  const sections = rawSections.map(rawSec => {
+    const { meta, rest: bodyRest } = consumeLeadingMeta(rawSec.bodyLines);
+    const layout = meta.layout || inferDefaultLayout(rawSec.title);
+
+    if (PROSE_LAYOUTS.has(layout)) {
+      const body = parseEntryBody(bodyRest);
+      return { title: rawSec.title, layout, kind: 'prose', meta, paragraphs: body.paragraphs };
     }
+
+    const entries = extractEntries(bodyRest).map(e => {
+      const body = parseEntryBody(e.bodyLines);
+      return { title: e.title, meta: body.meta, bullets: body.bullets, paragraphs: body.paragraphs };
+    });
+    return { title: rawSec.title, layout, kind: 'list', meta, entries };
   });
 
-  return model;
+  return { profile, sections };
 }
 
 // ---------- Rendering ----------
 
+function displayHeadingFor(section) {
+  const plainDefault = { about: 'About', experience: 'Experience', certification: 'Certification', blog: 'Blog', projects: 'Projects', contact: 'Contact' }[section.layout];
+  if (plainDefault && section.title === plainDefault) return DEFAULT_HEADING_TEXT[section.layout];
+  return section.title;
+}
+
+function visibleSections(model) {
+  return model.sections.filter(s => s.layout !== 'education');
+}
+
 function renderSidebar(model) {
   const p = model.profile;
-  const navItems = NAV_ORDER
-    .filter(id => model.sections[capitalize(id)] || id === 'about')
-    .map((id, i) => `
-      <li><a href="#${id}"><span class="nav-num">${String(i + 1).padStart(2, '0')}.</span> ${NAV_LABELS[id]}</a></li>
+  const navItems = visibleSections(model)
+    .map((s, i) => `
+      <li><a href="#${slug(s.title)}"><span class="nav-num">${String(i + 1).padStart(2, '0')}.</span> ${escapeHtml(s.title)}</a></li>
     `).join('');
 
-  const blogUrl = (model.sections['Blog'] && model.sections['Blog'].meta.view_all_url) || '#';
+  const blogSection = model.sections.find(s => s.layout === 'blog');
+  const blogUrl = (blogSection && blogSection.meta.view_all_url) || '#';
 
   document.getElementById('sidebar-root').innerHTML = `
     <div class="sidebar-top">
@@ -194,17 +214,13 @@ function renderSidebar(model) {
   `;
 }
 
-function capitalize(id) {
-  return id.charAt(0).toUpperCase() + id.slice(1);
-}
-
 function heading(numStr, text) {
   return `<h3 class="section-heading"><span class="num">${numStr}.</span> ${escapeHtml(text)} <span class="rule"></span></h3>`;
 }
 
 function renderAbout(section, numStr) {
   const body = section.paragraphs.map(p => `<p>${inlineMd(p)}</p>`).join('');
-  return `<section id="about" class="section">${heading(numStr, 'About Me')}<div class="section-body">${body}</div></section>`;
+  return `<section id="${slug(section.title)}" class="section">${heading(numStr, displayHeadingFor(section))}<div class="section-body">${body}</div></section>`;
 }
 
 function renderExperience(expSection, eduSection, numStr) {
@@ -241,8 +257,8 @@ function renderExperience(expSection, eduSection, numStr) {
   `).join('');
 
   return `
-    <section id="experience" class="section">
-      ${heading(numStr, "Where I've Worked")}
+    <section id="${slug(expSection.title)}" class="section">
+      ${heading(numStr, displayHeadingFor(expSection))}
       <div class="section-body">
         <div class="tabs" id="exp-tabs">
           <div class="tab-list" role="tablist" aria-label="Job tabs">${tabs}</div>
@@ -276,8 +292,8 @@ function renderCertification(section, numStr) {
     ? `<a class="view-all" href="${escapeHtml(section.meta.view_all_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(section.meta.view_all_label || 'View all')} &nearr;</a>`
     : '';
   return `
-    <section id="certification" class="section">
-      ${heading(numStr, 'Certification')}
+    <section id="${slug(section.title)}" class="section">
+      ${heading(numStr, displayHeadingFor(section))}
       <div class="section-body">
         ${intro}
         <div class="cert-grid">${cards}</div>
@@ -300,8 +316,8 @@ function renderBlog(section, numStr) {
     ? `<a class="view-all" href="${escapeHtml(section.meta.view_all_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(section.meta.view_all_label || 'View all')} &nearr;</a>`
     : '';
   return `
-    <section id="blog" class="section">
-      ${heading(numStr, 'Blog')}
+    <section id="${slug(section.title)}" class="section">
+      ${heading(numStr, displayHeadingFor(section))}
       <div class="section-body">
         ${intro}
         <ul class="blog-list">${items}</ul>
@@ -323,8 +339,8 @@ function renderProjects(section, numStr) {
     </div>
   `).join('');
   return `
-    <section id="projects" class="section">
-      ${heading(numStr, 'Projects')}
+    <section id="${slug(section.title)}" class="section">
+      ${heading(numStr, displayHeadingFor(section))}
       <div class="section-body"><div class="project-grid">${cards}</div></div>
     </section>
   `;
@@ -333,8 +349,8 @@ function renderProjects(section, numStr) {
 function renderContact(section, numStr, profile) {
   const body = section.paragraphs.map(p => `<p>${inlineMd(p)}</p>`).join('');
   return `
-    <section id="contact" class="section contact-section">
-      ${heading(numStr, "What's Next?")}
+    <section id="${slug(section.title)}" class="section contact-section">
+      ${heading(numStr, displayHeadingFor(section))}
       <div class="section-body contact-body">
         ${body}
         <a class="big-email" href="mailto:${escapeHtml(profile.email || '')}">${escapeHtml(section.meta.cta_label || 'Say Hello')}</a>
@@ -343,17 +359,52 @@ function renderContact(section, numStr, profile) {
   `;
 }
 
+function renderCustomSection(section, numStr) {
+  const intro = section.meta.intro ? `<p class="section-intro">${inlineMd(section.meta.intro)}</p>` : '';
+  const cards = section.entries.map(e => {
+    const dates = e.meta.dates ? `<p class="dates">${escapeHtml(e.meta.dates)}</p>` : '';
+    const paragraphs = e.paragraphs.map(p => `<p>${inlineMd(p)}</p>`).join('');
+    const bullets = e.bullets.length ? `<ul>${e.bullets.map(b => `<li>${inlineMd(b)}</li>`).join('')}</ul>` : '';
+    const tags = e.meta.tags
+      ? `<ul class="tech-tags">${e.meta.tags.split(',').map(t => `<li>${escapeHtml(t.trim())}</li>`).join('')}</ul>` : '';
+    return `
+      <div class="custom-card">
+        <h5>${escapeHtml(e.title)}</h5>
+        ${dates}
+        ${paragraphs}
+        ${bullets}
+        ${tags}
+      </div>
+    `;
+  }).join('');
+  return `
+    <section id="${slug(section.title)}" class="section">
+      ${heading(numStr, section.title)}
+      <div class="section-body">
+        ${intro}
+        <div class="custom-grid">${cards}</div>
+      </div>
+    </section>
+  `;
+}
+
 function renderMain(model) {
-  const sections = model.sections;
+  const eduSection = model.sections.find(s => s.layout === 'education');
   let html = '';
   let num = 1;
 
-  if (sections['About']) html += renderAbout(sections['About'], String(num++).padStart(2, '0'));
-  if (sections['Experience']) html += renderExperience(sections['Experience'], sections['Education'], String(num++).padStart(2, '0'));
-  if (sections['Certification']) html += renderCertification(sections['Certification'], String(num++).padStart(2, '0'));
-  if (sections['Blog']) html += renderBlog(sections['Blog'], String(num++).padStart(2, '0'));
-  if (sections['Projects']) html += renderProjects(sections['Projects'], String(num++).padStart(2, '0'));
-  if (sections['Contact']) html += renderContact(sections['Contact'], String(num++).padStart(2, '0'), model.profile);
+  visibleSections(model).forEach(sec => {
+    const numStr = String(num++).padStart(2, '0');
+    switch (sec.layout) {
+      case 'about': html += renderAbout(sec, numStr); break;
+      case 'experience': html += renderExperience(sec, eduSection, numStr); break;
+      case 'certification': html += renderCertification(sec, numStr); break;
+      case 'blog': html += renderBlog(sec, numStr); break;
+      case 'projects': html += renderProjects(sec, numStr); break;
+      case 'contact': html += renderContact(sec, numStr, model.profile); break;
+      default: html += renderCustomSection(sec, numStr); break;
+    }
+  });
 
   html += `<footer class="footer"><p>${inlineMd(model.profile.footer || '')}</p></footer>`;
 

@@ -1,12 +1,18 @@
 /**
- * editor.js — a form-based editor for content.md that reads and writes
+ * editor.js — a section-based editor for content.md that reads and writes
  * directly to GitHub via the REST API, called from this page in the
  * visitor's own browser. No backend, no server-side token: the GitHub
  * Personal Access Token lives only in this browser's localStorage and is
  * sent only to api.github.com.
  *
- * Parsing logic below is intentionally identical to content.js, so a
- * saved file always re-parses the same way the live site reads it.
+ * The content model is an ORDERED LIST of sections, mirroring content.js:
+ * state.sections is an array in document order, each tagged with a
+ * `layout` (about/experience/education/certification/blog/projects/
+ * projects/contact/custom). The sidebar lets you select one section at a
+ * time, drag (or use the up/down buttons) to reorder them, rename them,
+ * add new ones, or delete them. Parsing/serialization here is intentionally
+ * identical in spirit to content.js, so a saved file always re-parses the
+ * same way the live site reads it.
  */
 
 const OWNER = 'MontaniConnect';
@@ -18,10 +24,25 @@ const PAT_STORAGE_KEY = 'portfolio_editor_gh_pat';
 
 const KNOWN_KEYS = new Set([
   'name', 'eyebrow', 'role', 'blurb', 'email', 'linkedin', 'footer',
-  'dates', 'location', 'tags', 'tab', 'degree',
+  'dates', 'location', 'tags', 'tab', 'degree', 'layout',
   'intro', 'view_all_url', 'view_all_label',
   'issuer', 'date', 'credential_id', 'url', 'cta_label'
 ]);
+
+const DEFAULT_LAYOUT_FOR_TITLE = {
+  About: 'about', Experience: 'experience', Education: 'education',
+  Certification: 'certification', Blog: 'blog', Projects: 'projects', Contact: 'contact'
+};
+const PROSE_LAYOUTS = new Set(['about', 'contact']);
+const LAYOUT_LABELS = {
+  about: 'About', experience: 'Experience', education: 'Education',
+  certification: 'Certification', blog: 'Blog', projects: 'Projects',
+  contact: 'Contact', custom: 'Custom'
+};
+
+function inferDefaultLayout(title) {
+  return DEFAULT_LAYOUT_FOR_TITLE[title] || 'custom';
+}
 
 // ---------- Parsing (mirrors content.js) ----------
 
@@ -96,11 +117,10 @@ function parseEntryBody(bodyLines) {
   return { meta, bullets, paragraphs };
 }
 
-function splitEntries(bodyLines) {
-  const { meta: sectionMeta, rest } = consumeLeadingMeta(bodyLines);
+function extractEntries(lines) {
   const entries = [];
   let current = null;
-  for (const line of rest) {
+  for (const line of lines) {
     const h3 = line.match(/^###\s+(.+)$/);
     if (h3) {
       if (current) entries.push(current);
@@ -110,83 +130,176 @@ function splitEntries(bodyLines) {
     }
   }
   if (current) entries.push(current);
-  return { sectionMeta, entries };
+  return entries;
 }
 
 function parseContent(raw) {
   const { profile, rest } = parseFrontmatter(raw);
-  const sections = splitSections(rest);
-  const model = { profile, sections: {}, order: [] };
+  const rawSections = splitSections(rest);
 
-  sections.forEach(sec => {
-    const key = sec.title;
-    model.order.push(key);
-    if (key === 'About' || key === 'Contact') {
-      const parsed = parseEntryBody(sec.bodyLines);
-      model.sections[key] = { type: 'prose', meta: parsed.meta, paragraphs: parsed.paragraphs };
-    } else {
-      const { sectionMeta, entries } = splitEntries(sec.bodyLines);
-      const parsedEntries = entries.map(e => {
-        const body = parseEntryBody(e.bodyLines);
-        return { title: e.title, meta: body.meta, bullets: body.bullets, paragraphs: body.paragraphs };
-      });
-      model.sections[key] = { type: 'list', meta: sectionMeta, entries: parsedEntries };
+  const sections = rawSections.map(rawSec => {
+    const { meta, rest: bodyRest } = consumeLeadingMeta(rawSec.bodyLines);
+    const layout = meta.layout || inferDefaultLayout(rawSec.title);
+
+    if (PROSE_LAYOUTS.has(layout)) {
+      const body = parseEntryBody(bodyRest);
+      return { title: rawSec.title, layout, kind: 'prose', meta, paragraphs: body.paragraphs };
     }
+
+    const entries = extractEntries(bodyRest).map(e => {
+      const body = parseEntryBody(e.bodyLines);
+      return { title: e.title, meta: body.meta, bullets: body.bullets, paragraphs: body.paragraphs };
+    });
+    return { title: rawSec.title, layout, kind: 'list', meta, entries };
   });
 
-  return model;
+  return { profile, sections };
 }
 
 // ---------- Model <-> editable state ----------
 
+let nextId = 1;
+function newId() { return 'sec-' + (nextId++); }
+
+function sectionToStateEntry(sec) {
+  const base = { id: newId(), title: sec.title, layout: sec.layout };
+  switch (sec.layout) {
+    case 'about':
+      return { ...base, paragraphs: sec.paragraphs.slice() };
+    case 'contact':
+      return { ...base, cta_label: sec.meta.cta_label || '', paragraphs: sec.paragraphs.slice() };
+    case 'experience':
+      return {
+        ...base, entries: sec.entries.map(e => ({
+          title: e.title, tab: e.meta.tab || '', dates: e.meta.dates || '',
+          location: e.meta.location || '', tags: e.meta.tags || '', bullets: e.bullets.slice()
+        }))
+      };
+    case 'education':
+      return {
+        ...base, entries: sec.entries.map(e => ({
+          title: e.title, degree: e.meta.degree || '', dates: e.meta.dates || '',
+          paragraph: e.paragraphs[0] || ''
+        }))
+      };
+    case 'certification':
+      return {
+        ...base,
+        intro: sec.meta.intro || '', view_all_url: sec.meta.view_all_url || '', view_all_label: sec.meta.view_all_label || '',
+        entries: sec.entries.map(e => ({ title: e.title, issuer: e.meta.issuer || '', date: e.meta.date || '', credential_id: e.meta.credential_id || '' }))
+      };
+    case 'blog':
+      return {
+        ...base,
+        intro: sec.meta.intro || '', view_all_url: sec.meta.view_all_url || '', view_all_label: sec.meta.view_all_label || '',
+        entries: sec.entries.map(e => ({ title: e.title, date: e.meta.date || '', url: e.meta.url || '' }))
+      };
+    case 'projects':
+      return {
+        ...base, entries: sec.entries.map(e => ({ title: e.title, dates: e.meta.dates || '', tags: e.meta.tags || '', paragraph: e.paragraphs[0] || '' }))
+      };
+    default:
+      return {
+        ...base, layout: 'custom', intro: sec.meta.intro || '',
+        entries: sec.entries.map(e => ({
+          title: e.title, dates: e.meta.dates || '', tags: e.meta.tags || '',
+          paragraph: e.paragraphs[0] || '', bullets: e.bullets.slice()
+        }))
+      };
+  }
+}
+
 function modelToState(model) {
   const p = model.profile;
-  const sec = model.sections;
-  const cert = sec['Certification'];
-  const blog = sec['Blog'];
-  const contact = sec['Contact'];
-
   return {
     profile: {
       name: p.name || '', eyebrow: p.eyebrow || '', role: p.role || '',
       blurb: p.blurb || '', email: p.email || '', linkedin: p.linkedin || '',
       footer: p.footer || ''
     },
-    about: (sec['About'] && sec['About'].paragraphs.slice()) || [],
-    experience: ((sec['Experience'] && sec['Experience'].entries) || []).map(e => ({
-      title: e.title, tab: e.meta.tab || '', dates: e.meta.dates || '',
-      location: e.meta.location || '', tags: e.meta.tags || '', bullets: e.bullets.slice()
-    })),
-    education: ((sec['Education'] && sec['Education'].entries) || []).map(e => ({
-      title: e.title, degree: e.meta.degree || '', dates: e.meta.dates || '',
-      paragraph: e.paragraphs[0] || ''
-    })),
-    certification: {
-      intro: (cert && cert.meta.intro) || '',
-      view_all_url: (cert && cert.meta.view_all_url) || '',
-      view_all_label: (cert && cert.meta.view_all_label) || '',
-      entries: ((cert && cert.entries) || []).map(e => ({
-        title: e.title, issuer: e.meta.issuer || '', date: e.meta.date || '',
-        credential_id: e.meta.credential_id || ''
-      }))
-    },
-    blog: {
-      intro: (blog && blog.meta.intro) || '',
-      view_all_url: (blog && blog.meta.view_all_url) || '',
-      view_all_label: (blog && blog.meta.view_all_label) || '',
-      entries: ((blog && blog.entries) || []).map(e => ({
-        title: e.title, date: e.meta.date || '', url: e.meta.url || ''
-      }))
-    },
-    projects: ((sec['Projects'] && sec['Projects'].entries) || []).map(e => ({
-      title: e.title, dates: e.meta.dates || '', tags: e.meta.tags || '',
-      paragraph: e.paragraphs[0] || ''
-    })),
-    contact: {
-      cta_label: (contact && contact.meta.cta_label) || '',
-      paragraphs: (contact && contact.paragraphs.slice()) || []
-    }
+    sections: model.sections.map(sectionToStateEntry)
   };
+}
+
+function serializeSection(sec) {
+  let out = `## ${sec.title}\n`;
+  if (sec.layout !== inferDefaultLayout(sec.title)) out += `layout: ${sec.layout}\n`;
+  out += '\n';
+
+  switch (sec.layout) {
+    case 'about':
+      out += sec.paragraphs.map(p => p.trim()).filter(Boolean).join('\n\n') + '\n\n';
+      break;
+    case 'contact':
+      if (sec.cta_label) out += `cta_label: ${sec.cta_label}\n\n`;
+      out += sec.paragraphs.map(p => p.trim()).filter(Boolean).join('\n\n') + '\n';
+      break;
+    case 'experience':
+      sec.entries.forEach(e => {
+        out += `### ${e.title}\n\n`;
+        if (e.tab) out += `tab: ${e.tab}\n`;
+        if (e.dates) out += `dates: ${e.dates}\n`;
+        out += `location: ${e.location || ''}\n`;
+        if (e.tags) out += `tags: ${e.tags}\n`;
+        out += '\n';
+        if (e.bullets.length) out += e.bullets.map(b => `- ${b.trim()}`).join('\n') + '\n\n';
+      });
+      break;
+    case 'education':
+      sec.entries.forEach(e => {
+        out += `### ${e.title}\n\n`;
+        if (e.degree) out += `degree: ${e.degree}\n`;
+        if (e.dates) out += `dates: ${e.dates}\n`;
+        out += '\n';
+        if (e.paragraph) out += `${e.paragraph.trim()}\n\n`;
+      });
+      break;
+    case 'certification':
+      if (sec.intro) out += `intro: ${sec.intro}\n`;
+      if (sec.view_all_url) out += `view_all_url: ${sec.view_all_url}\n`;
+      if (sec.view_all_label) out += `view_all_label: ${sec.view_all_label}\n`;
+      out += '\n';
+      sec.entries.forEach(e => {
+        out += `### ${e.title}\n\n`;
+        if (e.issuer) out += `issuer: ${e.issuer}\n`;
+        if (e.date) out += `date: ${e.date}\n`;
+        out += `credential_id: ${e.credential_id || ''}\n\n`;
+      });
+      break;
+    case 'blog':
+      if (sec.intro) out += `intro: ${sec.intro}\n`;
+      if (sec.view_all_url) out += `view_all_url: ${sec.view_all_url}\n`;
+      if (sec.view_all_label) out += `view_all_label: ${sec.view_all_label}\n`;
+      out += '\n';
+      sec.entries.forEach(e => {
+        out += `### ${e.title}\n\n`;
+        if (e.date) out += `date: ${e.date}\n`;
+        if (e.url) out += `url: ${e.url}\n`;
+        out += '\n';
+      });
+      break;
+    case 'projects':
+      sec.entries.forEach(e => {
+        out += `### ${e.title}\n\n`;
+        if (e.dates) out += `dates: ${e.dates}\n`;
+        if (e.tags) out += `tags: ${e.tags}\n`;
+        out += '\n';
+        if (e.paragraph) out += `${e.paragraph.trim()}\n\n`;
+      });
+      break;
+    default:
+      if (sec.intro) out += `intro: ${sec.intro}\n\n`;
+      sec.entries.forEach(e => {
+        out += `### ${e.title}\n\n`;
+        if (e.dates) out += `dates: ${e.dates}\n`;
+        if (e.tags) out += `tags: ${e.tags}\n`;
+        out += '\n';
+        if (e.paragraph) out += `${e.paragraph.trim()}\n\n`;
+        if (e.bullets.length) out += e.bullets.map(b => `- ${b.trim()}`).join('\n') + '\n\n';
+      });
+      break;
+  }
+  return out;
 }
 
 function stateToMarkdown(s) {
@@ -195,73 +308,7 @@ function stateToMarkdown(s) {
     out += `${k}: ${s.profile[k] || ''}\n`;
   });
   out += '---\n\n';
-
-  out += '## About\n\n';
-  out += s.about.map(p => p.trim()).filter(Boolean).join('\n\n');
-  out += '\n\n';
-
-  out += '## Experience\n\n';
-  s.experience.forEach(e => {
-    out += `### ${e.title}\n\n`;
-    if (e.tab) out += `tab: ${e.tab}\n`;
-    if (e.dates) out += `dates: ${e.dates}\n`;
-    out += `location: ${e.location || ''}\n`;
-    if (e.tags) out += `tags: ${e.tags}\n`;
-    out += '\n';
-    if (e.bullets.length) {
-      out += e.bullets.map(b => `- ${b.trim()}`).join('\n') + '\n\n';
-    }
-  });
-
-  out += '## Education\n\n';
-  s.education.forEach(e => {
-    out += `### ${e.title}\n\n`;
-    if (e.degree) out += `degree: ${e.degree}\n`;
-    if (e.dates) out += `dates: ${e.dates}\n`;
-    out += '\n';
-    if (e.paragraph) out += `${e.paragraph.trim()}\n\n`;
-  });
-
-  out += '## Certification\n\n';
-  if (s.certification.intro) out += `intro: ${s.certification.intro}\n`;
-  if (s.certification.view_all_url) out += `view_all_url: ${s.certification.view_all_url}\n`;
-  if (s.certification.view_all_label) out += `view_all_label: ${s.certification.view_all_label}\n`;
-  out += '\n';
-  s.certification.entries.forEach(e => {
-    out += `### ${e.title}\n\n`;
-    if (e.issuer) out += `issuer: ${e.issuer}\n`;
-    if (e.date) out += `date: ${e.date}\n`;
-    out += `credential_id: ${e.credential_id || ''}\n`;
-    out += '\n';
-  });
-
-  out += '## Blog\n\n';
-  if (s.blog.intro) out += `intro: ${s.blog.intro}\n`;
-  if (s.blog.view_all_url) out += `view_all_url: ${s.blog.view_all_url}\n`;
-  if (s.blog.view_all_label) out += `view_all_label: ${s.blog.view_all_label}\n`;
-  out += '\n';
-  s.blog.entries.forEach(e => {
-    out += `### ${e.title}\n\n`;
-    if (e.date) out += `date: ${e.date}\n`;
-    if (e.url) out += `url: ${e.url}\n`;
-    out += '\n';
-  });
-
-  out += '## Projects\n\n';
-  s.projects.forEach(e => {
-    out += `### ${e.title}\n\n`;
-    if (e.dates) out += `dates: ${e.dates}\n`;
-    if (e.tags) out += `tags: ${e.tags}\n`;
-    out += '\n';
-    if (e.paragraph) out += `${e.paragraph.trim()}\n\n`;
-  });
-
-  out += '## Contact\n\n';
-  if (s.contact.cta_label) out += `cta_label: ${s.contact.cta_label}\n`;
-  out += '\n';
-  out += s.contact.paragraphs.map(p => p.trim()).filter(Boolean).join('\n\n');
-  out += '\n';
-
+  out += s.sections.map(serializeSection).join('');
   return out;
 }
 
@@ -333,10 +380,15 @@ async function verifyToken(token) {
   return !!(json.permissions && json.permissions.push);
 }
 
-// ---------- state / path helpers ----------
+// ---------- state ----------
 
 let state = null;
 let currentSha = null;
+let activeId = 'profile';
+
+function activeTarget() {
+  return activeId === 'profile' ? state.profile : state.sections.find(s => s.id === activeId);
+}
 
 function keysOf(path) { return path.split('.').map(k => /^\d+$/.test(k) ? Number(k) : k); }
 function getAt(obj, path) { return keysOf(path).reduce((o, k) => (o == null ? o : o[k]), obj); }
@@ -354,7 +406,7 @@ function escapeHtml(str) {
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// ---------- rendering ----------
+// ---------- field / list / entry helpers ----------
 
 function field(label, path, value, opts) {
   opts = opts || {};
@@ -404,213 +456,383 @@ function entryCard(path, index, total, headerFields, bodyHtml) {
   `;
 }
 
-function renderForm() {
-  const app = document.getElementById('app');
-  const p = state.profile;
-
-  let html = '';
-
-  // Profile
-  html += `<div class="section-block"><h2>Profile</h2>`;
-  html += field('Name', 'profile.name', p.name);
-  html += field('Eyebrow (e.g. "Hello, I\'m")', 'profile.eyebrow', p.eyebrow);
-  html += field('Role / title', 'profile.role', p.role);
-  html += field('Blurb', 'profile.blurb', p.blurb, { textarea: true });
-  html += field('Email', 'profile.email', p.email);
-  html += field('LinkedIn URL', 'profile.linkedin', p.linkedin);
-  html += field('Footer text', 'profile.footer', p.footer);
-  html += `</div>`;
-
-  // About
-  html += `<div class="section-block"><h2>About</h2>`;
-  html += listEditor('about', state.about, 'A paragraph about you…', 'paragraph');
-  html += `</div>`;
-
-  // Experience
-  html += `<div class="section-block"><h2>Experience</h2>`;
-  state.experience.forEach((e, i) => {
-    const header = `
-      ${field('Title (e.g. "Role @ Company")', `experience.${i}.title`, e.title)}
-      <div class="field-row">
-        ${field('Tab label', `experience.${i}.tab`, e.tab)}
-        ${field('Dates', `experience.${i}.dates`, e.dates)}
-      </div>
-      <div class="field-row">
-        ${field('Location', `experience.${i}.location`, e.location)}
-        ${field('Tags (comma separated)', `experience.${i}.tags`, e.tags)}
-      </div>
-    `;
-    const body = `<label class="field-label">Bullets</label>${listEditor(`experience.${i}.bullets`, e.bullets, 'Describe what you did…', 'bullet')}`;
-    html += entryCard(`experience.${i}`, i, state.experience.length, header, body);
-  });
-  html += `<div class="add-row"><button type="button" class="btn btn-ghost btn-small" data-action="add-entry" data-section="experience">+ Add experience</button></div>`;
-  html += `</div>`;
-
-  // Education
-  html += `<div class="section-block"><h2>Education</h2>`;
-  state.education.forEach((e, i) => {
-    const header = `
-      ${field('Institution', `education.${i}.title`, e.title)}
-      <div class="field-row">
-        ${field('Degree', `education.${i}.degree`, e.degree)}
-        ${field('Dates', `education.${i}.dates`, e.dates)}
-      </div>
-    `;
-    const body = field('Description', `education.${i}.paragraph`, e.paragraph, { textarea: true });
-    html += entryCard(`education.${i}`, i, state.education.length, header, body);
-  });
-  html += `<div class="add-row"><button type="button" class="btn btn-ghost btn-small" data-action="add-entry" data-section="education">+ Add education</button></div>`;
-  html += `</div>`;
-
-  // Certification
-  html += `<div class="section-block"><h2>Certification</h2>`;
-  html += field('Intro line', 'certification.intro', state.certification.intro);
-  html += `<div class="field-row">
-      ${field('"View all" URL', 'certification.view_all_url', state.certification.view_all_url)}
-      ${field('"View all" label', 'certification.view_all_label', state.certification.view_all_label)}
-    </div>`;
-  state.certification.entries.forEach((e, i) => {
-    const header = `
-      ${field('Certification title', `certification.entries.${i}.title`, e.title)}
-      <div class="field-row">
-        ${field('Issuer', `certification.entries.${i}.issuer`, e.issuer)}
-        ${field('Date', `certification.entries.${i}.date`, e.date)}
-      </div>
-      ${field('Credential ID (optional)', `certification.entries.${i}.credential_id`, e.credential_id)}
-    `;
-    html += entryCard(`certification.entries.${i}`, i, state.certification.entries.length, header, '');
-  });
-  html += `<div class="add-row"><button type="button" class="btn btn-ghost btn-small" data-action="add-entry" data-section="certification">+ Add certification</button></div>`;
-  html += `</div>`;
-
-  // Blog
-  html += `<div class="section-block"><h2>Blog</h2>`;
-  html += field('Intro line', 'blog.intro', state.blog.intro);
-  html += `<div class="field-row">
-      ${field('"View all" URL', 'blog.view_all_url', state.blog.view_all_url)}
-      ${field('"View all" label', 'blog.view_all_label', state.blog.view_all_label)}
-    </div>`;
-  state.blog.entries.forEach((e, i) => {
-    const header = `
-      ${field('Post title', `blog.entries.${i}.title`, e.title)}
-      <div class="field-row">
-        ${field('Date', `blog.entries.${i}.date`, e.date)}
-        ${field('URL', `blog.entries.${i}.url`, e.url)}
-      </div>
-    `;
-    html += entryCard(`blog.entries.${i}`, i, state.blog.entries.length, header, '');
-  });
-  html += `<div class="add-row"><button type="button" class="btn btn-ghost btn-small" data-action="add-entry" data-section="blog">+ Add blog post</button></div>`;
-  html += `</div>`;
-
-  // Projects
-  html += `<div class="section-block"><h2>Projects</h2>`;
-  state.projects.forEach((e, i) => {
-    const header = `
-      ${field('Project title', `projects.${i}.title`, e.title)}
-      <div class="field-row">
-        ${field('Dates', `projects.${i}.dates`, e.dates)}
-        ${field('Tags (comma separated)', `projects.${i}.tags`, e.tags)}
-      </div>
-    `;
-    const body = field('Description', `projects.${i}.paragraph`, e.paragraph, { textarea: true });
-    html += entryCard(`projects.${i}`, i, state.projects.length, header, body);
-  });
-  html += `<div class="add-row"><button type="button" class="btn btn-ghost btn-small" data-action="add-entry" data-section="projects">+ Add project</button></div>`;
-  html += `</div>`;
-
-  // Contact
-  html += `<div class="section-block"><h2>Contact</h2>`;
-  html += field('Button label (e.g. "Say Hello")', 'contact.cta_label', state.contact.cta_label);
-  html += listEditor('contact.paragraphs', state.contact.paragraphs, 'Contact section text…', 'paragraph');
-  html += `</div>`;
-
-  html += `
-    <div class="savebar">
-      <button id="btn-download" class="btn btn-ghost">Download content.md</button>
-      <button id="btn-publish" class="btn btn-primary">Publish to GitHub</button>
-    </div>
-  `;
-
-  app.innerHTML = html;
-  attachFormListeners();
+function addEntryRow(label) {
+  return `<div class="add-row"><button type="button" class="btn btn-ghost btn-small" data-action="add-entry">+ Add ${label}</button></div>`;
 }
 
-function newBlankEntry(section) {
-  switch (section) {
+function blankEntryFor(layout) {
+  switch (layout) {
     case 'experience': return { title: 'New Role @ Company', tab: '', dates: '', location: '', tags: '', bullets: [] };
     case 'education': return { title: 'New Institution', degree: '', dates: '', paragraph: '' };
     case 'certification': return { title: 'New Certification', issuer: '', date: '', credential_id: '' };
     case 'blog': return { title: 'New Post', date: '', url: '' };
     case 'projects': return { title: 'New Project', dates: '', tags: '', paragraph: '' };
-    default: return {};
+    default: return { title: 'New Entry', dates: '', tags: '', paragraph: '', bullets: [] };
   }
 }
 
-function attachFormListeners() {
-  const app = document.getElementById('app');
+// ---------- rendering: sidebar ----------
 
-  app.addEventListener('input', e => {
+function renderSidebarNav() {
+  const profileBtn = document.querySelector('[data-nav-id="profile"]');
+  if (profileBtn) profileBtn.classList.toggle('active', activeId === 'profile');
+
+  const list = document.getElementById('section-list');
+  list.innerHTML = state.sections.map((sec, i) => `
+    <li class="section-row${sec.id === activeId ? ' active' : ''}" draggable="true" data-section-id="${sec.id}" data-nav-id="${sec.id}">
+      <span class="row-main">
+        <span class="drag-handle" title="Drag to reorder" aria-hidden="true">⠿</span>
+        <span class="label">${escapeHtml(sec.title || 'Untitled')}</span>
+      </span>
+      <span class="reorder-btns">
+        <button type="button" class="icon-btn icon-btn-tiny" data-action="move-section-up" data-id="${sec.id}" ${i === 0 ? 'disabled' : ''} title="Move up">↑</button>
+        <button type="button" class="icon-btn icon-btn-tiny" data-action="move-section-down" data-id="${sec.id}" ${i === state.sections.length - 1 ? 'disabled' : ''} title="Move down">↓</button>
+      </span>
+    </li>
+  `).join('');
+}
+
+function moveSection(id, delta) {
+  const idx = state.sections.findIndex(s => s.id === id);
+  const newIdx = idx + delta;
+  if (idx === -1 || newIdx < 0 || newIdx >= state.sections.length) return;
+  const [item] = state.sections.splice(idx, 1);
+  state.sections.splice(newIdx, 0, item);
+  renderSidebarNav();
+}
+
+function reorderSection(dragId, targetId) {
+  if (dragId === targetId) return;
+  const fromIdx = state.sections.findIndex(s => s.id === dragId);
+  const toIdx = state.sections.findIndex(s => s.id === targetId);
+  if (fromIdx === -1 || toIdx === -1) return;
+  const [item] = state.sections.splice(fromIdx, 1);
+  state.sections.splice(toIdx, 0, item);
+  renderSidebarNav();
+}
+
+function deleteSection(id) {
+  const sec = state.sections.find(s => s.id === id);
+  if (!sec) return;
+  const ok = confirm(`Delete the "${sec.title || 'Untitled'}" section? This can't be undone once you publish.`);
+  if (!ok) return;
+  state.sections = state.sections.filter(s => s.id !== id);
+  activeId = 'profile';
+  renderSidebarNav();
+  renderActivePanel();
+  showToast('Section deleted — publish to make it permanent');
+}
+
+// ---------- rendering: main panel ----------
+
+function sectionHeaderHtml(sec) {
+  return `
+    <div class="section-detail-head">
+      ${field('Section title', 'title', sec.title)}
+      <span class="layout-badge">${escapeHtml(LAYOUT_LABELS[sec.layout] || sec.layout)}</span>
+      <button type="button" class="btn btn-ghost btn-small btn-danger-text" data-action="delete-section" data-id="${sec.id}">Delete section</button>
+    </div>
+  `;
+}
+
+function renderProfilePanel() {
+  const p = state.profile;
+  let html = '<div class="section-block"><h2>Profile</h2>';
+  html += field('Name', 'name', p.name);
+  html += field('Eyebrow (e.g. "Hello, I\'m")', 'eyebrow', p.eyebrow);
+  html += field('Role / title', 'role', p.role);
+  html += field('Blurb', 'blurb', p.blurb, { textarea: true });
+  html += field('Email', 'email', p.email);
+  html += field('LinkedIn URL', 'linkedin', p.linkedin);
+  html += field('Footer text', 'footer', p.footer);
+  html += '</div>';
+  return html;
+}
+
+function renderSectionPanel(sec) {
+  let html = sectionHeaderHtml(sec);
+
+  switch (sec.layout) {
+    case 'about':
+      html += listEditor('paragraphs', sec.paragraphs, 'A paragraph about you…', 'paragraph');
+      break;
+
+    case 'contact':
+      html += field('Button label (e.g. "Say Hello")', 'cta_label', sec.cta_label);
+      html += listEditor('paragraphs', sec.paragraphs, 'Contact section text…', 'paragraph');
+      break;
+
+    case 'experience':
+      sec.entries.forEach((e, i) => {
+        const header = `
+          ${field('Title (e.g. "Role @ Company")', `entries.${i}.title`, e.title)}
+          <div class="field-row">
+            ${field('Tab label', `entries.${i}.tab`, e.tab)}
+            ${field('Dates', `entries.${i}.dates`, e.dates)}
+          </div>
+          <div class="field-row">
+            ${field('Location', `entries.${i}.location`, e.location)}
+            ${field('Tags (comma separated)', `entries.${i}.tags`, e.tags)}
+          </div>
+        `;
+        const body = `<label class="field-label">Bullets</label>${listEditor(`entries.${i}.bullets`, e.bullets, 'Describe what you did…', 'bullet')}`;
+        html += entryCard(`entries.${i}`, i, sec.entries.length, header, body);
+      });
+      html += addEntryRow('experience');
+      break;
+
+    case 'education':
+      sec.entries.forEach((e, i) => {
+        const header = `
+          ${field('Institution', `entries.${i}.title`, e.title)}
+          <div class="field-row">
+            ${field('Degree', `entries.${i}.degree`, e.degree)}
+            ${field('Dates', `entries.${i}.dates`, e.dates)}
+          </div>
+        `;
+        const body = field('Description', `entries.${i}.paragraph`, e.paragraph, { textarea: true });
+        html += entryCard(`entries.${i}`, i, sec.entries.length, header, body);
+      });
+      html += addEntryRow('education entry');
+      break;
+
+    case 'certification':
+      html += field('Intro line', 'intro', sec.intro);
+      html += `<div class="field-row">
+          ${field('"View all" URL', 'view_all_url', sec.view_all_url)}
+          ${field('"View all" label', 'view_all_label', sec.view_all_label)}
+        </div>`;
+      sec.entries.forEach((e, i) => {
+        const header = `
+          ${field('Certification title', `entries.${i}.title`, e.title)}
+          <div class="field-row">
+            ${field('Issuer', `entries.${i}.issuer`, e.issuer)}
+            ${field('Date', `entries.${i}.date`, e.date)}
+          </div>
+          ${field('Credential ID (optional)', `entries.${i}.credential_id`, e.credential_id)}
+        `;
+        html += entryCard(`entries.${i}`, i, sec.entries.length, header, '');
+      });
+      html += addEntryRow('certification');
+      break;
+
+    case 'blog':
+      html += field('Intro line', 'intro', sec.intro);
+      html += `<div class="field-row">
+          ${field('"View all" URL', 'view_all_url', sec.view_all_url)}
+          ${field('"View all" label', 'view_all_label', sec.view_all_label)}
+        </div>`;
+      sec.entries.forEach((e, i) => {
+        const header = `
+          ${field('Post title', `entries.${i}.title`, e.title)}
+          <div class="field-row">
+            ${field('Date', `entries.${i}.date`, e.date)}
+            ${field('URL', `entries.${i}.url`, e.url)}
+          </div>
+        `;
+        html += entryCard(`entries.${i}`, i, sec.entries.length, header, '');
+      });
+      html += addEntryRow('blog post');
+      break;
+
+    case 'projects':
+      sec.entries.forEach((e, i) => {
+        const header = `
+          ${field('Project title', `entries.${i}.title`, e.title)}
+          <div class="field-row">
+            ${field('Dates', `entries.${i}.dates`, e.dates)}
+            ${field('Tags (comma separated)', `entries.${i}.tags`, e.tags)}
+          </div>
+        `;
+        const body = field('Description', `entries.${i}.paragraph`, e.paragraph, { textarea: true });
+        html += entryCard(`entries.${i}`, i, sec.entries.length, header, body);
+      });
+      html += addEntryRow('project');
+      break;
+
+    default:
+      html += field('Intro line (optional)', 'intro', sec.intro);
+      sec.entries.forEach((e, i) => {
+        const header = `
+          ${field('Entry title', `entries.${i}.title`, e.title)}
+          <div class="field-row">
+            ${field('Dates (optional)', `entries.${i}.dates`, e.dates)}
+            ${field('Tags (comma separated, optional)', `entries.${i}.tags`, e.tags)}
+          </div>
+        `;
+        const body = `
+          ${field('Description', `entries.${i}.paragraph`, e.paragraph, { textarea: true })}
+          <label class="field-label">Bullets</label>${listEditor(`entries.${i}.bullets`, e.bullets, 'A detail…', 'bullet')}
+        `;
+        html += entryCard(`entries.${i}`, i, sec.entries.length, header, body);
+      });
+      html += addEntryRow('entry');
+      break;
+  }
+
+  return html;
+}
+
+function renderActivePanel() {
+  const el = document.getElementById('editor-main');
+  if (activeId === 'profile') {
+    el.innerHTML = renderProfilePanel();
+    return;
+  }
+  const sec = state.sections.find(s => s.id === activeId);
+  if (!sec) {
+    activeId = 'profile';
+    el.innerHTML = renderProfilePanel();
+    renderSidebarNav();
+    return;
+  }
+  el.innerHTML = renderSectionPanel(sec);
+}
+
+// ---------- event wiring ----------
+
+function attachSidebarListeners() {
+  const nav = document.getElementById('editor-sidebar');
+  let dragId = null;
+
+  nav.addEventListener('click', e => {
+    const actionBtn = e.target.closest('[data-action]');
+    if (actionBtn) {
+      const action = actionBtn.getAttribute('data-action');
+      const id = actionBtn.getAttribute('data-id');
+      if (action === 'move-section-up') moveSection(id, -1);
+      else if (action === 'move-section-down') moveSection(id, 1);
+      return;
+    }
+    const row = e.target.closest('[data-nav-id]');
+    if (row) {
+      activeId = row.getAttribute('data-nav-id');
+      renderSidebarNav();
+      renderActivePanel();
+    }
+  });
+
+  nav.addEventListener('dragstart', e => {
+    const row = e.target.closest('[data-section-id]');
+    if (!row) return;
+    dragId = row.getAttribute('data-section-id');
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  nav.addEventListener('dragend', e => {
+    const row = e.target.closest('[data-section-id]');
+    if (row) row.classList.remove('dragging');
+    document.querySelectorAll('.section-row.drop-target').forEach(el => el.classList.remove('drop-target'));
+    dragId = null;
+  });
+  nav.addEventListener('dragover', e => {
+    if (!dragId) return;
+    e.preventDefault();
+    const row = e.target.closest('[data-section-id]');
+    document.querySelectorAll('.section-row.drop-target').forEach(el => el.classList.remove('drop-target'));
+    if (row && row.getAttribute('data-section-id') !== dragId) row.classList.add('drop-target');
+  });
+  nav.addEventListener('drop', e => {
+    e.preventDefault();
+    const row = e.target.closest('[data-section-id]');
+    document.querySelectorAll('.section-row.drop-target').forEach(el => el.classList.remove('drop-target'));
+    if (row && dragId) reorderSection(dragId, row.getAttribute('data-section-id'));
+    dragId = null;
+  });
+
+  document.getElementById('btn-add-section').addEventListener('click', openAddSectionPanel);
+}
+
+function attachMainListeners() {
+  const main = document.getElementById('editor-main');
+
+  main.addEventListener('input', e => {
     const el = e.target;
     const path = el.getAttribute('data-path');
     if (!path) return;
-    setAt(state, path, el.value);
+    const target = activeTarget();
+    if (!target) return;
+    setAt(target, path, el.value);
+    if (path === 'title') {
+      const label = document.querySelector(`[data-nav-id="${activeId}"] .label`);
+      if (label) label.textContent = el.value || 'Untitled';
+    }
   });
 
-  app.addEventListener('click', e => {
+  main.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const action = btn.getAttribute('data-action');
     const path = btn.getAttribute('data-path');
 
+    if (action === 'delete-section') {
+      deleteSection(btn.getAttribute('data-id'));
+      return;
+    }
+
+    const target = activeTarget();
+    if (!target) return;
+
     if (action === 'add-item') {
-      const arr = getAt(state, path);
+      const arr = getAt(target, path);
       arr.push('');
-      renderForm();
+      renderActivePanel();
     } else if (action === 'remove-item') {
       const parts = path.split('.');
       const index = Number(parts.pop());
-      const arr = getAt(state, parts.join('.'));
+      const arr = getAt(target, parts.join('.'));
       arr.splice(index, 1);
-      renderForm();
+      renderActivePanel();
     } else if (action === 'add-entry') {
-      const section = btn.getAttribute('data-section');
-      if (section === 'certification') state.certification.entries.push(newBlankEntry('certification'));
-      else if (section === 'blog') state.blog.entries.push(newBlankEntry('blog'));
-      else state[section].push(newBlankEntry(section));
-      renderForm();
+      target.entries.push(blankEntryFor(target.layout));
+      renderActivePanel();
     } else if (action === 'remove-entry') {
-      removeEntryAtPath(path);
-      renderForm();
+      const { arr, index } = entryArrayForPath(target, path);
+      arr.splice(index, 1);
+      renderActivePanel();
     } else if (action === 'move-up' || action === 'move-down') {
-      moveEntryAtPath(path, action === 'move-up' ? -1 : 1);
-      renderForm();
+      moveEntryAtPath(target, path, action === 'move-up' ? -1 : 1);
+      renderActivePanel();
     }
   });
-
-  document.getElementById('btn-download').addEventListener('click', downloadMarkdown);
-  document.getElementById('btn-publish').addEventListener('click', openPublishPanel);
 }
 
-function entryArrayForPath(path) {
-  // path is like "experience.3" or "certification.entries.1"
+function entryArrayForPath(target, path) {
   const parts = path.split('.');
   const index = Number(parts.pop());
-  const arr = getAt(state, parts.join('.'));
+  const arr = getAt(target, parts.join('.'));
   return { arr, index };
 }
 
-function removeEntryAtPath(path) {
-  const { arr, index } = entryArrayForPath(path);
-  arr.splice(index, 1);
-}
-
-function moveEntryAtPath(path, delta) {
-  const { arr, index } = entryArrayForPath(path);
+function moveEntryAtPath(target, path, delta) {
+  const { arr, index } = entryArrayForPath(target, path);
   const newIndex = index + delta;
   if (newIndex < 0 || newIndex >= arr.length) return;
   const [item] = arr.splice(index, 1);
   arr.splice(newIndex, 0, item);
+}
+
+// ---------- add section ----------
+
+function openAddSectionPanel() {
+  document.getElementById('new-section-name').value = '';
+  document.getElementById('add-section-panel').hidden = false;
+  document.getElementById('new-section-name').focus();
+}
+function closeAddSectionPanel() {
+  document.getElementById('add-section-panel').hidden = true;
+}
+function confirmAddSection() {
+  const input = document.getElementById('new-section-name');
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  const sec = { id: newId(), title: name, layout: 'custom', intro: '', entries: [] };
+  state.sections.push(sec);
+  activeId = sec.id;
+  closeAddSectionPanel();
+  renderSidebarNav();
+  renderActivePanel();
+  showToast('Section added — publish to make it live');
 }
 
 // ---------- download fallback ----------
@@ -754,15 +976,27 @@ async function boot() {
   });
   document.getElementById('btn-cancel-publish').addEventListener('click', closePublishPanel);
   document.getElementById('btn-confirm-publish').addEventListener('click', confirmPublish);
+  document.getElementById('btn-cancel-add-section').addEventListener('click', closeAddSectionPanel);
+  document.getElementById('btn-confirm-add-section').addEventListener('click', confirmAddSection);
+  document.getElementById('new-section-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); confirmAddSection(); }
+  });
+  document.getElementById('btn-download').addEventListener('click', downloadMarkdown);
+  document.getElementById('btn-publish').addEventListener('click', openPublishPanel);
+
+  attachSidebarListeners();
+  attachMainListeners();
 
   try {
     const { raw, sha } = await loadFromGitHub();
     currentSha = sha;
     const model = parseContent(raw);
     state = modelToState(model);
-    renderForm();
+    activeId = state.sections.length ? state.sections[0].id : 'profile';
+    renderSidebarNav();
+    renderActivePanel();
   } catch (err) {
-    document.getElementById('app').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
+    document.getElementById('editor-main').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
   }
 }
 

@@ -261,6 +261,23 @@ img { max-width: 100%; display: block; }
 .project-card .dates { font-family: var(--mono); font-size: 12px; color: var(--text-tertiary); margin-bottom: 14px; }
 .project-card p:not(.dates) { font-size: 14px; flex: 1; }
 
+/* ============ Custom sections ============ */
+.custom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 28px 0; }
+.custom-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 24px;
+  transition: border-color var(--transition), transform var(--transition);
+}
+.custom-card:hover { border-color: var(--text-tertiary); transform: translateY(-3px); }
+.custom-card h5 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.custom-card .dates { font-family: var(--mono); font-size: 12px; color: var(--text-tertiary); margin-bottom: 10px; }
+.custom-card p:not(.dates) { font-size: 14px; }
+.custom-card ul:not(.tech-tags) { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.custom-card ul:not(.tech-tags) li { position: relative; padding-left: 20px; font-size: 14px; }
+.custom-card ul:not(.tech-tags) li::before { content: "▹"; position: absolute; left: 0; top: 0; color: var(--accent); }
+
 /* ============ Contact ============ */
 .contact-section { text-align: left; }
 .contact-body { max-width: 480px; }
@@ -347,7 +364,7 @@ img { max-width: 100%; display: block; }
   .tab-list { flex-direction: row; overflow-x: auto; border-left: none; border-bottom: 2px solid var(--border); margin-bottom: 24px; }
   .tab-btn { border-left: none; border-bottom: 2px solid transparent; margin-left: 0; margin-bottom: -2px; }
   .tab-btn.active { border-left-color: transparent; border-bottom-color: var(--accent); }
-  .cert-grid, .project-grid { grid-template-columns: 1fr; }
+  .cert-grid, .project-grid, .custom-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {

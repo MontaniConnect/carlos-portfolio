@@ -78,12 +78,109 @@ a { color: var(--text); text-decoration: underline; }
 .btn-danger-text { color: var(--danger); }
 
 /* ===== Layout ===== */
-.app {
-  max-width: 760px;
+.editor-shell {
+  display: flex;
+  align-items: flex-start;
+  gap: 28px;
+  max-width: 1040px;
   margin: 0 auto;
-  padding: 32px max(16px, env(safe-area-inset-right, 0px)) 120px max(16px, env(safe-area-inset-left, 0px));
+  padding: 28px max(16px, env(safe-area-inset-right, 0px)) 120px max(16px, env(safe-area-inset-left, 0px));
 }
 .loading { color: var(--text-tertiary); font-family: var(--mono); }
+
+/* ===== Editor sidebar (sections nav) ===== */
+.editor-sidebar {
+  width: 230px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 90px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.section-nav { display: flex; flex-direction: column; }
+.section-nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.section-nav-item:hover { background: var(--accent-dim); color: var(--text); }
+.section-nav-item.active { background: var(--accent-dim); color: var(--text); border-color: var(--border); }
+
+.section-divider { height: 1px; background: var(--border); margin: 12px 0 10px; }
+.sidebar-caption {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  margin: 0 0 6px 12px;
+}
+
+.section-list { display: flex; flex-direction: column; gap: 2px; list-style: none; margin: 0; padding: 0; }
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+}
+.section-row:hover { background: var(--accent-dim); }
+.section-row.active { background: var(--accent-dim); border-color: var(--border); }
+.section-row.dragging { opacity: 0.35; }
+.section-row.drop-target { border-color: var(--text-secondary); border-style: dashed; }
+.section-row .row-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.section-row .drag-handle { color: var(--text-tertiary); cursor: grab; font-size: 13px; flex-shrink: 0; }
+.section-row .label {
+  color: var(--text-secondary);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-row.active .label { color: var(--text); font-weight: 600; }
+.section-row .reorder-btns { display: flex; gap: 2px; flex-shrink: 0; }
+.icon-btn-tiny { width: 22px; height: 22px; font-size: 11px; }
+
+.btn-add-section { margin-top: 10px; justify-content: center; text-align: center; }
+
+/* ===== Editor main (active section fields) ===== */
+.editor-main {
+  flex: 1;
+  min-width: 0;
+}
+.section-detail-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.section-detail-head .field { flex: 1 1 220px; margin-bottom: 0; }
+.layout-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border);
+  padding: 7px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
 
 .section-block {
   margin-bottom: 40px;
@@ -228,4 +325,30 @@ input:focus, textarea:focus { outline: none; border-color: var(--text-secondary)
 
 @media (max-width: 600px) {
   .topbar { flex-direction: column; align-items: flex-start; }
+}
+
+@media (max-width: 760px) {
+  .editor-shell { flex-direction: column; padding-top: 20px; }
+  .editor-sidebar {
+    position: static;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .section-nav { flex-shrink: 0; }
+  .section-divider { display: none; }
+  .sidebar-caption { display: none; }
+  .section-list {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    flex: 1;
+  }
+  .section-row { flex: 0 0 auto; }
+  .section-row .label { max-width: 120px; }
+  .btn-add-section { flex-shrink: 0; margin-top: 0; white-space: nowrap; }
 }
