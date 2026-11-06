@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Content Editor — Carlos Abiera Portfolio</title>
+<meta name="robots" content="noindex, nofollow" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23000%22/><text x=%2250%22 y=%2268%22 font-size=%2260%22 fill=%22%23fff%22 text-anchor=%22middle%22 font-family=%22sans-serif%22>C</text></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="editor.css" />
+</head>
+<body>
+
+<!--
+  This page edits content.md directly on GitHub via the GitHub REST API,
+  called straight from your browser. It never sends anything to a
+  third-party server: your access token stays only in this browser's
+  localStorage. It needs a GitHub Personal Access Token scoped to just
+  this repository (Contents: Read & write) — not your GitHub password
+  or full account access. See the "Connect" panel for how to create one.
+-->
+
+<header class="topbar">
+  <div class="topbar-left">
+    <h1>Content Editor</h1>
+    <p class="sub">Editing <code>content.md</code> — live site updates automatically after publish.</p>
+  </div>
+  <div class="topbar-right">
+    <span id="conn-status" class="status status-disconnected">Not connected</span>
+    <button id="btn-connect" class="btn btn-ghost">Connect to GitHub</button>
+  </div>
+</header>
+
+<div id="connect-panel" class="panel panel-floating" hidden>
+  <h2>Connect to GitHub</h2>
+  <p>Create a <strong>fine-grained personal access token</strong> scoped only to this repository:</p>
+  <ol>
+    <li>Go to GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens</li>
+    <li>Repository access: <strong>Only select repositories</strong> → <code>carlos-portfolio</code></li>
+    <li>Permissions → Repository permissions → <strong>Contents: Read and write</strong></li>
+    <li>Generate, copy the token, and paste it below</li>
+  </ol>
+  <p class="hint">The token is stored only in this browser (localStorage) and is sent only to <code>api.github.com</code> — never to Claude or anyone else. Remove it any time with "Forget token" below, or revoke it on GitHub.</p>
+  <label class="field-label" for="pat-input">Personal access token</label>
+  <div class="pat-row">
+    <input id="pat-input" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false" />
+    <button id="btn-toggle-pat" class="btn btn-ghost btn-small" type="button">Show</button>
+  </div>
+  <div class="panel-actions">
+    <button id="btn-save-pat" class="btn btn-primary">Save &amp; Connect</button>
+    <button id="btn-forget-pat" class="btn btn-ghost">Forget token</button>
+    <button id="btn-close-connect" class="btn btn-ghost">Close</button>
+  </div>
+  <p id="connect-msg" class="msg"></p>
+</div>
+
+<main id="app" class="app">
+  <p class="loading">Loading current content…</p>
+</main>
+
+<div id="publish-panel" class="panel panel-floating" hidden>
+  <h2>Publish to GitHub</h2>
+  <p>This commits your changes directly to <code>content.md</code> on the live repo. The site rebuilds automatically — usually live within a minute.</p>
+  <label class="field-label" for="commit-message">Commit message</label>
+  <input id="commit-message" type="text" value="Update portfolio content" />
+  <details class="preview-details">
+    <summary>Preview raw content.md</summary>
+    <textarea id="preview-raw" class="preview-raw" readonly></textarea>
+  </details>
+  <div class="panel-actions">
+    <button id="btn-confirm-publish" class="btn btn-primary">Yes, publish now</button>
+    <button id="btn-cancel-publish" class="btn btn-ghost">Cancel</button>
+  </div>
+  <p id="publish-msg" class="msg"></p>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="editor.js"></script>
+</body>
+</html>
