@@ -1,11 +1,14 @@
 /**
  * editor.js — a section-based editor for content.md. Reading content.md is
- * a plain, unauthenticated GitHub API call (the repo is public). Publishing
- * goes through a small Vercel serverless function (api/publish.js), which
- * is the only place that holds the real GitHub token — it never reaches
- * this browser. This page only needs the editor's own login credentials
- * (checked again, for real, by that server function) to be allowed to
- * publish.
+ * a plain, unauthenticated GitHub API call (the repo is public).
+ *
+ * Publishing is manual and token-free by design: GitHub's write APIs always
+ * require a credential, and this editor deliberately holds none. Instead,
+ * "Publish" copies the generated content.md to your clipboard and opens
+ * GitHub's own file editor for you to paste into and commit — using your
+ * own logged-in GitHub session, not a stored secret. (A server-side option
+ * — api/publish.js, a Vercel function — exists in this repo for a one-click
+ * publish later, but isn't used by this flow.)
  *
  * The content model is an ORDERED LIST of sections, mirroring content.js:
  * state.sections is an array in document order, each tagged with a
@@ -22,20 +25,7 @@ const REPO = 'carlos-portfolio';
 const BRANCH = 'main';
 const FILE_PATH = 'content.md';
 const API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`;
-
-// Where the publish request actually goes — the serverless function that
-// holds the real GitHub token. Update this if the backend is redeployed
-// under a different Vercel project URL.
-const PUBLISH_API_URL = 'https://carlos-self.vercel.app/api/publish';
-
-// Client-side login gate only — a convenience to keep the editor UI from
-// opening to a casual visitor. It is NOT the real security boundary: that
-// check happens again, for real, inside api/publish.js on the server,
-// against the EDITOR_USERNAME/EDITOR_PASSWORD env vars there. Change both
-// places together if you want different credentials.
-const EDITOR_USERNAME = 'admin';
-const EDITOR_PASSWORD = 'admin';
-const LOGIN_SESSION_KEY = 'portfolio_editor_login';
+const GITHUB_EDIT_URL = `https://github.com/${OWNER}/${REPO}/edit/${BRANCH}/${FILE_PATH}`;
 
 const KNOWN_KEYS = new Set([
   'name', 'eyebrow', 'role', 'blurb', 'email', 'linkedin', 'footer',
@@ -346,50 +336,6 @@ async function loadFromGitHub() {
   if (!res.ok) throw new Error(`Couldn't load content.md from GitHub (${res.status}).`);
   const json = await res.json();
   return { raw: base64ToUtf8(json.content), sha: json.sha };
-}
-
-// ---------- publish (via the serverless function, which holds the real token) ----------
-
-async function publishViaApi(newRaw, sha, message) {
-  const creds = getStoredCredentials();
-  if (!creds) throw new Error('Please log in first.');
-  const res = await fetch(PUBLISH_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      username: creds.username,
-      password: creds.password,
-      content: newRaw,
-      sha,
-      message: message || 'Update portfolio content'
-    })
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    if (res.status === 401) {
-      clearStoredCredentials();
-      throw new Error('Login rejected by the server. Please log in again.');
-    }
-    throw new Error(json.error || `The publish server rejected the update (${res.status}).`);
-  }
-  return json;
-}
-
-// ---------- login (client-side gate; real check happens in api/publish.js) ----------
-
-function getStoredCredentials() {
-  const raw = sessionStorage.getItem(LOGIN_SESSION_KEY);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-function setStoredCredentials(username, password) {
-  sessionStorage.setItem(LOGIN_SESSION_KEY, JSON.stringify({ username, password }));
-}
-function clearStoredCredentials() {
-  sessionStorage.removeItem(LOGIN_SESSION_KEY);
-}
-function isLoggedIn() {
-  return !!getStoredCredentials();
 }
 
 // ---------- state ----------
@@ -863,7 +809,7 @@ function downloadMarkdown() {
   showToast('Downloaded content.md');
 }
 
-// ---------- publish flow ----------
+// ---------- publish flow (copy to clipboard + open GitHub's own editor) ----------
 
 function openPublishPanel() {
   const raw = stateToMarkdown(state);
@@ -879,67 +825,20 @@ function closePublishPanel() {
 }
 
 async function confirmPublish() {
-  const btn = document.getElementById('btn-confirm-publish');
   const msgEl = document.getElementById('publish-msg');
-  btn.disabled = true;
-  btn.textContent = 'Publishing…';
-  msgEl.textContent = '';
-  msgEl.className = 'msg';
+  const raw = stateToMarkdown(state);
+
   try {
-    const raw = stateToMarkdown(state);
-    const message = document.getElementById('commit-message').value || 'Update portfolio content';
-    const result = await publishViaApi(raw, currentSha, message);
-    currentSha = result.sha;
-    msgEl.textContent = 'Published. The live site will update automatically within about a minute.';
+    await navigator.clipboard.writeText(raw);
+    msgEl.textContent = 'Copied. Paste it into the GitHub editor that just opened (select all first), then commit there.';
     msgEl.className = 'msg ok';
-    showToast('Published to GitHub ✓');
-    setTimeout(closePublishPanel, 1600);
+    showToast('Copied content.md to clipboard');
   } catch (err) {
-    msgEl.textContent = err.message;
+    msgEl.textContent = "Couldn't copy automatically — select all the text in the preview above and copy it manually, then paste it into the GitHub editor that just opened.";
     msgEl.className = 'msg err';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Yes, publish now';
   }
-}
 
-// ---------- login screen ----------
-
-function showLoginScreen() {
-  document.getElementById('login-screen').hidden = false;
-  document.getElementById('editor-shell').hidden = true;
-  document.querySelector('.savebar').hidden = true;
-  document.getElementById('btn-logout').hidden = true;
-  document.getElementById('login-username').focus();
-}
-
-function showEditorShell() {
-  document.getElementById('login-screen').hidden = true;
-  document.getElementById('editor-shell').hidden = false;
-  document.querySelector('.savebar').hidden = false;
-  document.getElementById('btn-logout').hidden = false;
-}
-
-function attemptLogin() {
-  const username = document.getElementById('login-username').value.trim();
-  const password = document.getElementById('login-password').value;
-  const msgEl = document.getElementById('login-msg');
-  if (username !== EDITOR_USERNAME || password !== EDITOR_PASSWORD) {
-    msgEl.textContent = 'Invalid username or password.';
-    msgEl.className = 'msg err';
-    return;
-  }
-  setStoredCredentials(username, password);
-  msgEl.textContent = '';
-  msgEl.className = 'msg';
-  document.getElementById('login-password').value = '';
-  showEditorShell();
-  loadAndRenderEditor();
-}
-
-function logOut() {
-  clearStoredCredentials();
-  showLoginScreen();
+  window.open(GITHUB_EDIT_URL, '_blank', 'noopener,noreferrer');
 }
 
 // ---------- toast ----------
@@ -955,27 +854,7 @@ function showToast(text) {
 
 // ---------- boot ----------
 
-async function loadAndRenderEditor() {
-  try {
-    const { raw, sha } = await loadFromGitHub();
-    currentSha = sha;
-    const model = parseContent(raw);
-    state = modelToState(model);
-    activeId = state.sections.length ? state.sections[0].id : 'profile';
-    renderSidebarNav();
-    renderActivePanel();
-  } catch (err) {
-    document.getElementById('editor-main').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
-  }
-}
-
 async function boot() {
-  document.getElementById('btn-login').addEventListener('click', attemptLogin);
-  document.getElementById('login-password').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); attemptLogin(); }
-  });
-  document.getElementById('btn-logout').addEventListener('click', logOut);
-
   document.getElementById('btn-cancel-publish').addEventListener('click', closePublishPanel);
   document.getElementById('btn-confirm-publish').addEventListener('click', confirmPublish);
   document.getElementById('btn-cancel-add-section').addEventListener('click', closeAddSectionPanel);
@@ -989,11 +868,16 @@ async function boot() {
   attachSidebarListeners();
   attachMainListeners();
 
-  if (isLoggedIn()) {
-    showEditorShell();
-    await loadAndRenderEditor();
-  } else {
-    showLoginScreen();
+  try {
+    const { raw, sha } = await loadFromGitHub();
+    currentSha = sha;
+    const model = parseContent(raw);
+    state = modelToState(model);
+    activeId = state.sections.length ? state.sections[0].id : 'profile';
+    renderSidebarNav();
+    renderActivePanel();
+  } catch (err) {
+    document.getElementById('editor-main').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
   }
 }
 
