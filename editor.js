@@ -1,9 +1,11 @@
 /**
- * editor.js — a section-based editor for content.md that reads and writes
- * directly to GitHub via the REST API, called from this page in the
- * visitor's own browser. No backend, no server-side token: the GitHub
- * Personal Access Token lives only in this browser's localStorage and is
- * sent only to api.github.com.
+ * editor.js — a section-based editor for content.md. Reading content.md is
+ * a plain, unauthenticated GitHub API call (the repo is public). Publishing
+ * goes through a small Vercel serverless function (api/publish.js), which
+ * is the only place that holds the real GitHub token — it never reaches
+ * this browser. This page only needs the editor's own login credentials
+ * (checked again, for real, by that server function) to be allowed to
+ * publish.
  *
  * The content model is an ORDERED LIST of sections, mirroring content.js:
  * state.sections is an array in document order, each tagged with a
@@ -20,7 +22,20 @@ const REPO = 'carlos-portfolio';
 const BRANCH = 'main';
 const FILE_PATH = 'content.md';
 const API_URL = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`;
-const PAT_STORAGE_KEY = 'portfolio_editor_gh_pat';
+
+// Where the publish request actually goes — the serverless function that
+// holds the real GitHub token. Update this if the backend is redeployed
+// under a different Vercel project URL.
+const PUBLISH_API_URL = 'https://carlos-self.vercel.app/api/publish';
+
+// Client-side login gate only — a convenience to keep the editor UI from
+// opening to a casual visitor. It is NOT the real security boundary: that
+// check happens again, for real, inside api/publish.js on the server,
+// against the EDITOR_USERNAME/EDITOR_PASSWORD env vars there. Change both
+// places together if you want different credentials.
+const EDITOR_USERNAME = 'admin';
+const EDITOR_PASSWORD = 'admin';
+const LOGIN_SESSION_KEY = 'portfolio_editor_login';
 
 const KNOWN_KEYS = new Set([
   'name', 'eyebrow', 'role', 'blurb', 'email', 'linkedin', 'footer',
@@ -314,13 +329,6 @@ function stateToMarkdown(s) {
 
 // ---------- base64 helpers (UTF-8 safe) ----------
 
-function utf8ToBase64(str) {
-  const bytes = new TextEncoder().encode(str);
-  let binary = '';
-  bytes.forEach(b => { binary += String.fromCharCode(b); });
-  return btoa(binary);
-}
-
 function base64ToUtf8(b64) {
   const binary = atob(b64.replace(/\n/g, ''));
   const bytes = new Uint8Array(binary.length);
@@ -328,56 +336,60 @@ function base64ToUtf8(b64) {
   return new TextDecoder().decode(bytes);
 }
 
-// ---------- GitHub API ----------
-
-function getToken() {
-  return localStorage.getItem(PAT_STORAGE_KEY) || '';
-}
+// ---------- GitHub reads (public repo, no auth needed) ----------
 
 async function loadFromGitHub() {
-  const headers = { Accept: 'application/vnd.github+json' };
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${API_URL}?ref=${BRANCH}`, { headers, cache: 'no-store' });
+  const res = await fetch(`${API_URL}?ref=${BRANCH}`, {
+    headers: { Accept: 'application/vnd.github+json' },
+    cache: 'no-store'
+  });
   if (!res.ok) throw new Error(`Couldn't load content.md from GitHub (${res.status}).`);
   const json = await res.json();
   return { raw: base64ToUtf8(json.content), sha: json.sha };
 }
 
-async function saveToGitHub(newRaw, sha, message) {
-  const token = getToken();
-  if (!token) throw new Error('Connect a GitHub token first.');
-  const res = await fetch(API_URL, {
-    method: 'PUT',
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
+// ---------- publish (via the serverless function, which holds the real token) ----------
+
+async function publishViaApi(newRaw, sha, message) {
+  const creds = getStoredCredentials();
+  if (!creds) throw new Error('Please log in first.');
+  const res = await fetch(PUBLISH_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      message: message || 'Update portfolio content',
-      content: utf8ToBase64(newRaw),
+      username: creds.username,
+      password: creds.password,
+      content: newRaw,
       sha,
-      branch: BRANCH
+      message: message || 'Update portfolio content'
     })
   });
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    if (res.status === 409) {
-      throw new Error('Someone/something else changed content.md since you loaded it. Reload the page and re-apply your edits.');
+    if (res.status === 401) {
+      clearStoredCredentials();
+      throw new Error('Login rejected by the server. Please log in again.');
     }
-    throw new Error(err.message || `GitHub rejected the update (${res.status}).`);
+    throw new Error(json.error || `The publish server rejected the update (${res.status}).`);
   }
-  return res.json();
+  return json;
 }
 
-async function verifyToken(token) {
-  const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}`, {
-    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` }
-  });
-  if (!res.ok) return false;
-  const json = await res.json();
-  return !!(json.permissions && json.permissions.push);
+// ---------- login (client-side gate; real check happens in api/publish.js) ----------
+
+function getStoredCredentials() {
+  const raw = sessionStorage.getItem(LOGIN_SESSION_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+function setStoredCredentials(username, password) {
+  sessionStorage.setItem(LOGIN_SESSION_KEY, JSON.stringify({ username, password }));
+}
+function clearStoredCredentials() {
+  sessionStorage.removeItem(LOGIN_SESSION_KEY);
+}
+function isLoggedIn() {
+  return !!getStoredCredentials();
 }
 
 // ---------- state ----------
@@ -858,12 +870,7 @@ function openPublishPanel() {
   document.getElementById('preview-raw').value = raw;
   document.getElementById('publish-msg').textContent = '';
   document.getElementById('publish-msg').className = 'msg';
-  const token = getToken();
-  document.getElementById('btn-confirm-publish').disabled = !token;
-  if (!token) {
-    document.getElementById('publish-msg').textContent = 'Connect a GitHub token first (top right) before publishing.';
-    document.getElementById('publish-msg').className = 'msg err';
-  }
+  document.getElementById('btn-confirm-publish').disabled = false;
   document.getElementById('publish-panel').hidden = false;
 }
 
@@ -881,8 +888,8 @@ async function confirmPublish() {
   try {
     const raw = stateToMarkdown(state);
     const message = document.getElementById('commit-message').value || 'Update portfolio content';
-    const result = await saveToGitHub(raw, currentSha, message);
-    currentSha = result.content.sha;
+    const result = await publishViaApi(raw, currentSha, message);
+    currentSha = result.sha;
     msgEl.textContent = 'Published. The live site will update automatically within about a minute.';
     msgEl.className = 'msg ok';
     showToast('Published to GitHub ✓');
@@ -896,55 +903,43 @@ async function confirmPublish() {
   }
 }
 
-// ---------- connect panel ----------
+// ---------- login screen ----------
 
-function updateConnStatus() {
-  const token = getToken();
-  const statusEl = document.getElementById('conn-status');
-  if (token) {
-    statusEl.textContent = 'Connected';
-    statusEl.className = 'status status-connected';
-  } else {
-    statusEl.textContent = 'Not connected';
-    statusEl.className = 'status status-disconnected';
-  }
+function showLoginScreen() {
+  document.getElementById('login-screen').hidden = false;
+  document.getElementById('editor-shell').hidden = true;
+  document.querySelector('.savebar').hidden = true;
+  document.getElementById('btn-logout').hidden = true;
+  document.getElementById('login-username').focus();
 }
 
-function openConnectPanel() {
-  document.getElementById('connect-msg').textContent = '';
-  document.getElementById('connect-msg').className = 'msg';
-  document.getElementById('connect-panel').hidden = false;
-}
-function closeConnectPanel() {
-  document.getElementById('connect-panel').hidden = true;
+function showEditorShell() {
+  document.getElementById('login-screen').hidden = true;
+  document.getElementById('editor-shell').hidden = false;
+  document.querySelector('.savebar').hidden = false;
+  document.getElementById('btn-logout').hidden = false;
 }
 
-async function saveToken() {
-  const input = document.getElementById('pat-input');
-  const msgEl = document.getElementById('connect-msg');
-  const token = input.value.trim();
-  if (!token) { msgEl.textContent = 'Paste a token first.'; msgEl.className = 'msg err'; return; }
-  msgEl.textContent = 'Verifying…';
-  msgEl.className = 'msg';
-  const ok = await verifyToken(token).catch(() => false);
-  if (!ok) {
-    msgEl.textContent = "Couldn't verify write access with that token. Check the repo scope and permissions.";
+function attemptLogin() {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const msgEl = document.getElementById('login-msg');
+  if (username !== EDITOR_USERNAME || password !== EDITOR_PASSWORD) {
+    msgEl.textContent = 'Invalid username or password.';
     msgEl.className = 'msg err';
     return;
   }
-  localStorage.setItem(PAT_STORAGE_KEY, token);
-  updateConnStatus();
-  msgEl.textContent = 'Connected.';
-  msgEl.className = 'msg ok';
-  setTimeout(closeConnectPanel, 900);
+  setStoredCredentials(username, password);
+  msgEl.textContent = '';
+  msgEl.className = 'msg';
+  document.getElementById('login-password').value = '';
+  showEditorShell();
+  loadAndRenderEditor();
 }
 
-function forgetToken() {
-  localStorage.removeItem(PAT_STORAGE_KEY);
-  document.getElementById('pat-input').value = '';
-  updateConnStatus();
-  document.getElementById('connect-msg').textContent = 'Token removed from this browser.';
-  document.getElementById('connect-msg').className = 'msg ok';
+function logOut() {
+  clearStoredCredentials();
+  showLoginScreen();
 }
 
 // ---------- toast ----------
@@ -960,20 +955,27 @@ function showToast(text) {
 
 // ---------- boot ----------
 
-async function boot() {
-  updateConnStatus();
+async function loadAndRenderEditor() {
+  try {
+    const { raw, sha } = await loadFromGitHub();
+    currentSha = sha;
+    const model = parseContent(raw);
+    state = modelToState(model);
+    activeId = state.sections.length ? state.sections[0].id : 'profile';
+    renderSidebarNav();
+    renderActivePanel();
+  } catch (err) {
+    document.getElementById('editor-main').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
+  }
+}
 
-  document.getElementById('btn-connect').addEventListener('click', openConnectPanel);
-  document.getElementById('btn-close-connect').addEventListener('click', closeConnectPanel);
-  document.getElementById('btn-save-pat').addEventListener('click', saveToken);
-  document.getElementById('btn-forget-pat').addEventListener('click', forgetToken);
-  document.getElementById('btn-toggle-pat').addEventListener('click', () => {
-    const input = document.getElementById('pat-input');
-    const btn = document.getElementById('btn-toggle-pat');
-    const show = input.type === 'password';
-    input.type = show ? 'text' : 'password';
-    btn.textContent = show ? 'Hide' : 'Show';
+async function boot() {
+  document.getElementById('btn-login').addEventListener('click', attemptLogin);
+  document.getElementById('login-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); attemptLogin(); }
   });
+  document.getElementById('btn-logout').addEventListener('click', logOut);
+
   document.getElementById('btn-cancel-publish').addEventListener('click', closePublishPanel);
   document.getElementById('btn-confirm-publish').addEventListener('click', confirmPublish);
   document.getElementById('btn-cancel-add-section').addEventListener('click', closeAddSectionPanel);
@@ -987,16 +989,11 @@ async function boot() {
   attachSidebarListeners();
   attachMainListeners();
 
-  try {
-    const { raw, sha } = await loadFromGitHub();
-    currentSha = sha;
-    const model = parseContent(raw);
-    state = modelToState(model);
-    activeId = state.sections.length ? state.sections[0].id : 'profile';
-    renderSidebarNav();
-    renderActivePanel();
-  } catch (err) {
-    document.getElementById('editor-main').innerHTML = `<p class="loading">Couldn't load content.md: ${escapeHtml(err.message)}</p>`;
+  if (isLoggedIn()) {
+    showEditorShell();
+    await loadAndRenderEditor();
+  } else {
+    showLoginScreen();
   }
 }
 

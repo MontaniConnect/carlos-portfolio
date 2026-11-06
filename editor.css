@@ -257,6 +257,26 @@ input:focus, textarea:focus { outline: none; border-color: var(--text-secondary)
 
 .add-row { margin-top: 8px; }
 
+/* ===== Login screen ===== */
+.login-screen {
+  min-height: calc(100vh - 90px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  width: min(360px, 100%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px;
+}
+.login-card h2 { font-size: 18px; margin-bottom: 8px; }
+.login-card .hint { font-size: 13px; color: var(--text-tertiary); margin: 0 0 20px; }
+.login-card input { margin-bottom: 14px; }
+.login-submit { width: 100%; margin-top: 4px; }
+
 /* ===== Floating panels ===== */
 .panel-floating {
   position: fixed;

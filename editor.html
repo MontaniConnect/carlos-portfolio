@@ -14,12 +14,12 @@
 <body>
 
 <!--
-  This page edits content.md directly on GitHub via the GitHub REST API,
-  called straight from your browser. It never sends anything to a
-  third-party server: your access token stays only in this browser's
-  localStorage. It needs a GitHub Personal Access Token scoped to just
-  this repository (Contents: Read & write) — not your GitHub password
-  or full account access. See the "Connect" panel for how to create one.
+  This page reads content.md directly from GitHub (public repo, no auth
+  needed). Publishing goes through a small serverless function
+  (api/publish.js on Vercel) that holds the real GitHub token server-side
+  — it's never sent to or stored in this browser. The login below is a
+  convenience gate on the editor UI; the server checks credentials again
+  for real before it will commit anything.
 -->
 
 <header class="topbar">
@@ -29,35 +29,24 @@
   </div>
   <div class="topbar-right">
     <a href="index.html" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View Live ↗</a>
-    <span id="conn-status" class="status status-disconnected">Not connected</span>
-    <button id="btn-connect" class="btn btn-ghost">Connect to GitHub</button>
+    <button id="btn-logout" class="btn btn-ghost" hidden>Log out</button>
   </div>
 </header>
 
-<div id="connect-panel" class="panel panel-floating" hidden>
-  <h2>Connect to GitHub</h2>
-  <p>Create a <strong>fine-grained personal access token</strong> scoped only to this repository:</p>
-  <ol>
-    <li>Go to GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens</li>
-    <li>Repository access: <strong>Only select repositories</strong> → <code>carlos-portfolio</code></li>
-    <li>Permissions → Repository permissions → <strong>Contents: Read and write</strong></li>
-    <li>Generate, copy the token, and paste it below</li>
-  </ol>
-  <p class="hint">The token is stored only in this browser (localStorage) and is sent only to <code>api.github.com</code> — never to Claude or anyone else. Remove it any time with "Forget token" below, or revoke it on GitHub.</p>
-  <label class="field-label" for="pat-input">Personal access token</label>
-  <div class="pat-row">
-    <input id="pat-input" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false" />
-    <button id="btn-toggle-pat" class="btn btn-ghost btn-small" type="button">Show</button>
+<div id="login-screen" class="login-screen" hidden>
+  <div class="login-card">
+    <h2>Content Editor Login</h2>
+    <p class="hint">Publishing is verified again on the server — this just keeps the editor from opening to a casual visitor.</p>
+    <label class="field-label" for="login-username">Username</label>
+    <input id="login-username" type="text" autocomplete="username" />
+    <label class="field-label" for="login-password">Password</label>
+    <input id="login-password" type="password" autocomplete="current-password" />
+    <button id="btn-login" class="btn btn-primary login-submit">Log in</button>
+    <p id="login-msg" class="msg"></p>
   </div>
-  <div class="panel-actions">
-    <button id="btn-save-pat" class="btn btn-primary">Save &amp; Connect</button>
-    <button id="btn-forget-pat" class="btn btn-ghost">Forget token</button>
-    <button id="btn-close-connect" class="btn btn-ghost">Close</button>
-  </div>
-  <p id="connect-msg" class="msg"></p>
 </div>
 
-<main class="editor-shell">
+<main id="editor-shell" class="editor-shell" hidden>
   <aside id="editor-sidebar" class="editor-sidebar">
     <nav class="section-nav">
       <button type="button" class="section-nav-item active" data-nav-id="profile">Profile</button>
@@ -98,7 +87,7 @@
   </div>
 </div>
 
-<div class="savebar">
+<div class="savebar" hidden>
   <button id="btn-download" class="btn btn-ghost">Download content.md</button>
   <button id="btn-publish" class="btn btn-primary">Publish to GitHub</button>
 </div>

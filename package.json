@@ -1,0 +1,9 @@
+{
+  "name": "carlos-portfolio-editor-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Serverless backend for the content editor's publish action. The static site itself is served from GitHub Pages; this Vercel project only hosts api/publish.js, which holds the GitHub token server-side.",
+  "engines": {
+    "node": ">=20"
+  }
+}
