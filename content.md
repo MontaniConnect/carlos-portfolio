@@ -8,6 +8,14 @@ linkedin: https://www.linkedin.com/in/carlos-abiera-a70a9ba5/
 footer: Designed & built by Carlos Abiera, in a layout inspired by [brittanychiang.com](https://brittanychiang.com/).
 ---
 
+## About
+
+I'm Carlos C. Abiera, Operations Manager at [Montani International Inc.](https://www.montani.ph/), a company of designers and developers helping US tech partners build and run remote teams. I hold a Master of Science in Information Technology, and I'm currently working toward a doctorate in Human Resources Management / Organizational Leadership at Ateneo de Davao University.
+
+Before moving into operations, I spent years as a developer and data engineer — building systems, wrangling data, and visualizing it into something a team could actually act on. That background now shapes how I run operations: data-informed, systems-minded, and focused on what keeps a distributed team performing.
+
+Outside of day-to-day operations, I write about management and remote work for [Montani Insights](https://www.montani.ph/author/carlos-abiera), study the concept of "intention" across search, social media, and work motivation, and I'm preparing to release a book, *Unlocking Cross-Cultural Success*.
+
 ## Experience
 
 ### Operations Manager @ Montani International Inc.
@@ -60,14 +68,6 @@ location:
 tags: Web Development
 
 - Web development and consulting engagement.
-
-## About
-
-I'm Carlos C. Abiera, Operations Manager at [Montani International Inc.](https://www.montani.ph/), a company of designers and developers helping US tech partners build and run remote teams. I hold a Master of Science in Information Technology, and I'm currently working toward a doctorate in Human Resources Management / Organizational Leadership at Ateneo de Davao University.
-
-Before moving into operations, I spent years as a developer and data engineer — building systems, wrangling data, and visualizing it into something a team could actually act on. That background now shapes how I run operations: data-informed, systems-minded, and focused on what keeps a distributed team performing.
-
-Outside of day-to-day operations, I write about management and remote work for [Montani Insights](https://www.montani.ph/author/carlos-abiera), study the concept of "intention" across search, social media, and work motivation, and I'm preparing to release a book, *Unlocking Cross-Cultural Success*.
 
 ## Education
 
