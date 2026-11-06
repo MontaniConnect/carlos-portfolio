@@ -380,7 +380,7 @@ async function publishViaApi(newRaw, sha, message) {
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401) {
+    if (res.status === 401 && json.reason === 'bad_login') {
       clearStoredCredentials();
       throw new Error('Login rejected by the server. Please log in again.');
     }

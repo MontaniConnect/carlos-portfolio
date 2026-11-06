@@ -43,7 +43,7 @@ module.exports = async (req, res) => {
   const expectedUser = process.env.EDITOR_USERNAME || 'admin';
   const expectedPass = process.env.EDITOR_PASSWORD || 'admin';
   if (username !== expectedUser || password !== expectedPass) {
-    res.status(401).json({ error: 'Invalid username or password.' });
+    res.status(401).json({ error: 'Invalid username or password.', reason: 'bad_login' });
     return;
   }
 
@@ -85,10 +85,17 @@ module.exports = async (req, res) => {
     const putJson = await putRes.json();
     if (!putRes.ok) {
       if (putRes.status === 409) {
-        res.status(409).json({ error: "Someone/something else changed content.md since you loaded it. Reload and re-apply your edits." });
+        res.status(409).json({ error: "Someone/something else changed content.md since you loaded it. Reload and re-apply your edits.", reason: 'conflict' });
         return;
       }
-      res.status(putRes.status).json({ error: putJson.message || 'GitHub rejected the update.' });
+      if (putRes.status === 401 || putRes.status === 403) {
+        res.status(putRes.status).json({
+          error: `GitHub rejected the server's token (${putJson.message || 'unauthorized'}). This means GITHUB_TOKEN on Vercel is missing, wrong, expired, or lacks Contents: Read & write on this repo — check Settings > Environment Variables and redeploy after fixing it.`,
+          reason: 'github_token'
+        });
+        return;
+      }
+      res.status(putRes.status).json({ error: putJson.message || 'GitHub rejected the update.', reason: 'github' });
       return;
     }
 
